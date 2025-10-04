@@ -1,0 +1,168 @@
+/* ========== PALETA (tema claro autorizado) ========== */
+:root{
+  /* Fondo / superficies */
+  --bg:         #F4F7FB;
+  --surface:    linear-gradient(90deg, #02AAB0 0%, #00CDAC 100%);
+  --panel:      #FFFFFF;
+  --card:       #FFFFFF;
+  --border:     #E7EEF5;
+
+  /* Texto */
+  --text:       #0F172A;
+  --muted:      #475569;
+
+  /* Marca / acentos */
+  --primary:    #11B6C7;
+  --primary-2:  #59D07A;
+  --highlight:  #2563EB;
+
+  /* Rejilla */
+  --grid:       #E9EEF5;
+
+  /* Alturas de gráficos (controladas por media queries) */
+  --h-pm:    340px;  /* PM */
+  --h-small: 220px;  /* RH / Temp */
+}
+
+/* Ajustes por altura/anchura para EVITAR SCROLL */
+@media (max-height: 900px), (max-width: 1400px){
+  :root{ --h-pm: 300px; --h-small: 200px; }
+}
+@media (max-height: 820px), (max-width: 1280px){
+  :root{ --h-pm: 260px; --h-small: 180px; }
+}
+@media (max-height: 780px), (max-width: 1100px){
+  :root{ --h-pm: 240px; --h-small: 160px; }
+  .charts-grid{ gap: 12px; }
+  .plot-card{ padding: 10px 12px; }
+  .topbar{ padding: 10px 12px; }
+  .controls{ padding: 12px; }
+  .js-plotly-plot .gtitle, .js-plotly-plot .gtitle text{ font-size: 14px !important; }
+}
+
+/* ========== BASE ========== */
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+}
+.page { padding: 16px 18px 28px; }
+
+/* ========== TOPBAR ========== */
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: 12px;
+  color: white;
+  box-shadow: 0 10px 24px rgba(2,170,176,.18);
+  margin-bottom: 12px;
+}
+.brand .logo{ font-weight:700; font-size:16px; letter-spacing:.2px }
+.brand .subtitle{ display:block; font-size:12px; opacity:.9 }
+.status .last-update{ font-size:12px; opacity:.9 }
+.status .disclaimer{ display:block; margin-top:6px; font-size:12px; opacity:.85 }
+
+/* ========== CONTROLES ========== */
+.controls{
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 20px rgba(15,23,42,.04);
+}
+.control-row{ display:flex; flex-wrap:wrap; gap:14px; }
+.control{ flex:1 1 240px; min-width:240px }
+.control.full{ flex:1 1 100% }
+.control.right{ display:flex; align-items:flex-end; gap:10px; justify-content:flex-end }
+.control label{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px }
+
+/* Dropdown/DatePicker */
+.Select__control, .DateInput, .DateRangePicker, .DatePickerSingle, .dash-dropdown, .dash-date-picker{
+  background:#fff;
+  border:1px solid var(--border);
+  color:var(--text);
+  border-radius:10px;
+  box-shadow:none;
+}
+.Select__menu{ background:#fff; color:var(--text); border:1px solid var(--border) }
+.Select__control--is-focused{ box-shadow: 0 0 0 3px rgba(17,182,199,.15); border-color: var(--primary) }
+
+/* Radio group */
+.radio-group ._dash-private-radio-items label{ margin-right:14px; color:var(--text) }
+.radio-group ._dash-private-radio-items input:checked + label{ color: var(--primary); font-weight:600 }
+
+/* Botones */
+.btn{ border-radius:10px; padding:10px 14px; font-weight:600; border:1px solid transparent; cursor:pointer }
+.btn.primary{
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color:white; box-shadow: 0 8px 22px rgba(17,182,199,.25);
+}
+.btn.primary:hover{ filter:brightness(1.06) }
+.btn.ghost{
+  background:white; color:var(--text);
+  border:1px solid var(--border);
+}
+.btn.ghost:hover{ border-color: var(--primary); color: var(--primary) }
+
+/* ========== REJILLA 12 COLUMNAS ========== */
+.charts-grid{
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+}
+
+/* Tarjetas */
+.plot-card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 22px rgba(2,170,176,.06);
+}
+
+/* Spans utilitarios */
+.col-span-12 { grid-column: span 12; }
+.col-span-6  { grid-column: span 6;  }
+
+/* Apilar en pantallas estrechas */
+@media (max-width: 980px){
+  .col-span-6 { grid-column: span 12; }
+}
+
+/* ===== Plotly – legibilidad ===== */
+.js-plotly-plot .gtitle, .js-plotly-plot .gtitle text{
+  fill: var(--text) !important;
+  font-weight: 700 !important;
+  font-size: 16px !important;
+}
+.js-plotly-plot .main-svg .xtick text,
+.js-plotly-plot .main-svg .ytick text,
+.js-plotly-plot .legend text{
+  fill: var(--muted) !important;
+  font-weight: 500 !important;
+}
+
+/* Tooltip / 'x unified' claro y legible */
+.js-plotly-plot .hoverlayer .hoverlabel,
+.js-plotly-plot .hoverlayer .hovertext{
+  background: rgba(255,255,255,.98) !important;
+  color: var(--text) !important;
+  border-color: var(--primary) !important;
+  box-shadow: 0 8px 18px rgba(15,23,42,.12) !important;
+}
+.js-plotly-plot .hoverlayer .bg{
+  fill: rgba(255,255,255,.98) !important;
+  stroke: var(--primary) !important;
+  stroke-width: 1 !important;
+}
+.js-plotly-plot .hoverlayer .hovertext text,
+.js-plotly-plot .hoverlayer .hoverlabel text{
+  fill: var(--text) !important;
+}
+
+/* Integración visual del canvas */
+.js-plotly-plot .plotly, .dash-graph, .dash-graph *{
+  --plot-paper: transparent;
+}
