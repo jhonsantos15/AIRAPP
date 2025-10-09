@@ -7,7 +7,7 @@ import enum  # <-- importante
 
 from sqlalchemy import (
     String, Integer, Float, Date, Time, DateTime, Text,
-    UniqueConstraint, Index, Enum as SAEnum  # <-- usamos SAEnum
+    UniqueConstraint, Index, Enum as SAEnum
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,7 +16,7 @@ from db import db
 BOGOTA = ZoneInfo("America/Bogota")
 
 
-class SensorChannel(enum.Enum):  # <-- Enum de Python, no de SQLAlchemy
+class SensorChannel(enum.Enum):  # Enum de Python (estable en migraciones)
     Um1 = "Um1"
     Um2 = "Um2"
 
@@ -37,6 +37,7 @@ class Measurement(db.Model):
     temp: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     rh:   Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Fechas en zona Bogotá para navegación por día
     fecha: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     hora:  Mapped[Optional[time]] = mapped_column(Time, nullable=True)
     fechah_local: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -45,11 +46,17 @@ class Measurement(db.Model):
     w:   Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     raw_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(BOGOTA))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(BOGOTA)
+    )
 
     __table_args__ = (
+        # Evita duplicados por equipo/canal/instante (clave “natural”)
         UniqueConstraint("device_id", "sensor_channel", "fechah_local", name="uq_device_channel_ts"),
+        # Búsquedas rápidas por rango temporal y por día
         Index("idx_fechah_local", "fechah_local"),
+        Index("idx_device_fecha", "device_id", "fecha"),
     )
 
 
@@ -109,8 +116,8 @@ def to_bogota_dt(fecha: Optional[str], hora: Optional[str], fechah: Optional[str
 
 
 def row_from_payload(payload: dict, device_id_fallback: Optional[str] = None) -> dict:
-    """Mapea JSON crudo a campos del ORM para un canal 'Um1' o 'Um2'.
-    Se invoca dos veces si hay datos para ambos canales.
+    """
+    Mapea JSON crudo a campos del ORM (se invoca dos veces si hay datos para Um1 y Um2).
     """
     device_id = payload.get("DeviceId") or device_id_fallback or "UNKNOWN"
 

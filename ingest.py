@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import logging
+import os.path as osp
 from typing import Iterable, List, Dict, Optional, Union
 from urllib.parse import urlparse
 from datetime import datetime, timezone
@@ -10,10 +11,17 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv, find_dotenv
 
-# Cargar .env (no sobreescribe variables ya definidas)
-load_dotenv(find_dotenv(), override=False)
+# Cargar .env (sobrescribe para asegurar consistencia de variables)
+load_dotenv(find_dotenv(), override=True)
 
 from azure.eventhub import EventHubConsumerClient, TransportType
+
+# Fuente de CAs por defecto (evita errores "cafile debe ser ruta válida")
+try:
+    import certifi
+    _DEFAULT_CAFILE = certifi.where()
+except Exception:
+    _DEFAULT_CAFILE = None
 
 from db import db
 from models import Measurement, SensorChannel, row_from_payload
@@ -38,13 +46,9 @@ ALLOWED = {
     if d.strip()
 }
 
-
 # ---------- Helpers de conexión/proxy ----------
 def parse_conn_str(cs: str) -> Dict[str, str]:
-    """
-    Extrae Endpoint, EntityPath y SharedAccessKeyName del connection string.
-    Devuelve dict con 'endpoint', 'host', 'entity_path', 'sak_name'.
-    """
+    """Extrae Endpoint, EntityPath y SharedAccessKeyName del connection string."""
     parts: Dict[str, str] = {}
     for kv in cs.split(";"):
         if "=" in kv:
@@ -62,26 +66,91 @@ def parse_conn_str(cs: str) -> Dict[str, str]:
         "sak_name": parts.get("SharedAccessKeyName", ""),
     }
 
+def _host_in_no_proxy(host: str) -> bool:
+    """Respeta NO_PROXY (coma-separado) por coincidencia exacta o por sufijo (.windows.net)."""
+    raw = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
+    if not raw:
+        return False
+    items = [x.strip() for x in raw.split(",") if x.strip()]
+    host_l = host.lower()
+    for pat in items:
+        pat_l = pat.lower()
+        if pat_l == "*":
+            return True
+        if host_l == pat_l:
+            return True
+        if pat_l.startswith(".") and host_l.endswith(pat_l):
+            return True
+        if host_l.endswith("." + pat_l):
+            return True
+    return False
 
-def parse_proxy_env() -> Optional[Dict[str, str]]:
+def parse_proxy_env(target_host: Optional[str] = None) -> Optional[Dict[str, Union[str, int]]]:
     """
-    Lee HTTP(S)_PROXY de entorno y lo convierte al dict que espera el SDK:
-    {"proxy_hostname": "...", "proxy_port": 8080, "username": "...", "password": "..."}
-    Acepta formatos http://user:pass@host:port o http://host:port
+    Dict de proxy para el SDK:
+      {"proxy_hostname": "...", "proxy_port": 8080, "username": "...", "password": "..."}
+    Fuentes: EVENTHUB_PROXY > HTTPS_PROXY > HTTP_PROXY
+    Kill-switch: FORCE_NO_PROXY=1 o NO_PROXY que coincida con el host.
     """
-    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if os.getenv("FORCE_NO_PROXY") == "1":
+        logger.info("FORCE_NO_PROXY=1: Ignorando cualquier proxy para Event Hub.")
+        return None
+    if target_host and _host_in_no_proxy(target_host):
+        logger.info(f"NO_PROXY activo para host '{target_host}', no se aplicará proxy.")
+        return None
+
+    proxy = os.getenv("EVENTHUB_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
     if not proxy:
         return None
+
     u = urlparse(proxy)
     if not u.hostname or not u.port:
+        logger.warning("Proxy inválido. Revise EVENTHUB_PROXY/HTTPS_PROXY/HTTP_PROXY (host o puerto faltante).")
         return None
-    out: Dict[str, str] = {"proxy_hostname": u.hostname, "proxy_port": u.port}
+
+    out: Dict[str, Union[str, int]] = {"proxy_hostname": u.hostname, "proxy_port": int(u.port)}
     if u.username:
         out["username"] = u.username
     if u.password:
         out["password"] = u.password
     return out
 
+def _effective_verify() -> Union[bool, str]:
+    """
+    Valor robusto para connection_verify (evita errores con CA):
+      - 'false'/'0'/'no'  -> False (solo pruebas)
+      - 'true'/'1'/'yes'  -> CA de certifi (si existe) o True
+      - ruta existente     -> se usa esa ruta
+      - vacío/inválido     -> CA de certifi (si existe) o True
+    """
+    v = os.getenv("EVENTHUB_VERIFY")
+    if v is None or not v.strip():
+        if _DEFAULT_CAFILE:
+            logger.info(f"TLS verify usando certifi: {_DEFAULT_CAFILE}")
+            return _DEFAULT_CAFILE
+        logger.info("TLS verify usando store del sistema (certifi no disponible).")
+        return True
+
+    vv = v.strip().lower()
+    if vv in ("false", "0", "no"):
+        logger.warning("TLS verify DESACTIVADO (solo pruebas).")
+        return False
+    if vv in ("true", "1", "yes"):
+        if _DEFAULT_CAFILE:
+            logger.info(f"TLS verify usando certifi: {_DEFAULT_CAFILE}")
+            return _DEFAULT_CAFILE
+        logger.info("TLS verify usando store del sistema (certifi no disponible).")
+        return True
+
+    if osp.isfile(v):
+        logger.info(f"TLS verify usando CA personalizada: {v}")
+        return v
+
+    logger.warning(f"EVENTHUB_VERIFY='{v}' no es booleano ni ruta válida; usando certifi/store por defecto.")
+    if _DEFAULT_CAFILE:
+        logger.info(f"TLS verify usando certifi: {_DEFAULT_CAFILE}")
+        return _DEFAULT_CAFILE
+    return True
 
 # ---------- Persistencia ----------
 def _save_rows(rows: List[Measurement]):
@@ -94,28 +163,27 @@ def _save_rows(rows: List[Measurement]):
             ).first()
             is not None
         )
+    # sólo agregamos los que no existan
         if not exists:
             db.session.add(r)
     db.session.commit()
-
 
 # ---------- Start position ----------
 def _normalize_start_position(s: Optional[str]) -> Union[str, datetime]:
     """
     Convierte 'latest'|'earliest'|ISO datetime (Bogotá) a formato aceptado por el SDK:
-    - earliest  -> "-1"
-    - latest    -> "@latest"
-    - ISO local -> datetime en UTC (tz-aware)
+      earliest -> "-1"
+      latest   -> "@latest"
+      ISO local-> datetime en UTC (tz-aware)
     """
     if not s:
-        return "-1"  # por defecto: earliest
+        return "-1"
     v = s.strip().lower()
     if v in ("latest", "@latest"):
         return "@latest"
     if v in ("earliest", "-1"):
         return "-1"
 
-    # Intentar parsear fecha-hora local Bogotá
     raw = s.strip().replace("Z", "")
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"):
         try:
@@ -127,7 +195,6 @@ def _normalize_start_position(s: Optional[str]) -> Union[str, datetime]:
             continue
     logger.warning(f"No pude interpretar --from='{s}'. Usaré earliest.")
     return "-1"
-
 
 # ---------- Consumidor ----------
 def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None):
@@ -147,17 +214,23 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
     )
     if not meta["entity_path"]:
         raise RuntimeError(
-            "Su connection string NO tiene EntityPath. Copie el *Extremo compatible con Event Hub* "
-            "desde IoT Hub (Puntos de conexión integrados) y asegúrese de que incluya `EntityPath=...`."
+            "Su connection string NO tiene EntityPath. Copie el Extremo compatible con Event Hub "
+            "desde IoT Hub (Puntos de conexión integrados) y asegúrese de que incluya EntityPath=...."
         )
 
-    http_proxy = parse_proxy_env()
+    http_proxy = parse_proxy_env(target_host=meta["host"])
     if http_proxy:
-        logger.info(f"Proxy detectado para WebSocket: {http_proxy['proxy_hostname']}:{http_proxy['proxy_port']}")
+        logger.info(f"Proxy configurado para WebSocket: {http_proxy['proxy_hostname']}:{http_proxy['proxy_port']}")
+
+    connection_verify = _effective_verify()
+
+    for var in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        if os.getenv(var):
+            logger.warning(f"Variable {var} detectada -> {os.getenv(var)} (podría afectar verificación TLS).")
 
     starting = _normalize_start_position(start_position)
 
-    # Asegura contexto de Flask para usar Measurement.query / db.session
+    # Contexto Flask para usar ORM
     from app import create_app
     app = create_app()
 
@@ -170,7 +243,8 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                 conn_str=conn_str,
                 consumer_group=cg,
                 transport_type=TransportType.AmqpOverWebsocket,  # Fuerza 443
-                http_proxy=http_proxy,
+                http_proxy=http_proxy,                            # proxy (o None)
+                connection_verify=connection_verify,              # False | ruta CA | True
             )
 
             # Métricas por minuto
@@ -187,15 +261,14 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
 
             def on_event(partition_context, event):
                 nonlocal msgs_in_window
-                # Cuando no hay mensajes dentro de max_wait_time => event == None (heartbeat)
                 if event is None:
-                    _flush_metrics()  # imprime si ya pasó 1 min
+                    _flush_metrics()  # heartbeat
                     return
                 try:
                     body = event.body_as_str(encoding="UTF-8")
                     payload = json.loads(body)
 
-                    # Extraer deviceId de system properties o del payload
+                    # deviceId desde system properties o payload
                     device_from_sys = None
                     try:
                         if getattr(event, "system_properties", None):
@@ -225,7 +298,6 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                                 pm10=float(payload.get("n25100Um1")) if payload.get("n25100Um1") is not None else None,
                             )
                         )
-
                     # Canal Um2
                     if ("n1025Um2" in payload) or ("n25100Um2" in payload):
                         rows.append(
@@ -247,7 +319,6 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                     # checkpoint solo tras persistir
                     partition_context.update_checkpoint(event)
 
-                    # imprime métrica si ya pasó 1 min
                     _flush_metrics()
                 except Exception as e:
                     logger.exception(f"Error procesando mensaje: {e}")
@@ -261,7 +332,7 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                         on_event=on_event,
                         on_partition_initialize=on_partition_initialize,
                         starting_position=starting,  # "-1" earliest | "@latest" | datetime(UTC)
-                        max_wait_time=60,           # <-- despierta cada 60s para heartbeat/métricas
+                        max_wait_time=60,           # heartbeat/métricas cada 60s
                     )
             except KeyboardInterrupt:
                 logger.info("Ingesta interrumpida por usuario")
@@ -270,7 +341,6 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                     f"Fallo de conexión (host={meta['host']}, CG={cg}, policy={meta['sak_name']}): {e}"
                 )
             finally:
-                # fuerza imprimir lo acumulado si salimos
                 try:
                     _flush_metrics(force=True)
                 except Exception:

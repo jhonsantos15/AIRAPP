@@ -1,18 +1,58 @@
+##===================================================================
+# INICIALIZAR TERMINAL UNO (SERVIDOR)
+py -3.11 -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1 
+python manage.py runserver --port 5000
+##===================================================================
+##===================================================================
+# INICIALIZAR TERMINAL DOS (INGESTA)
+py -3.11 -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+.\.venv\Scripts\Activate.ps1 
+python manage.py ingest --cg asa-s6 --from latest
+##===================================================================
+
+
+# En ESTA terminal si la ingesta falla (solo sesión actual)
+
+Remove-Item Env:\HTTPS_PROXY -ErrorAction SilentlyContinue
+Remove-Item Env:\HTTP_PROXY  -ErrorAction SilentlyContinue
+$env:NO_PROXY = "127.0.0.1,localhost"
+
+$env:HTTPS_PROXY = "http://USUARIO:CLAVE@proxy.real.miempresa.com:80"
+$env:HTTP_PROXY  = $env:HTTPS_PROXY
+$env:NO_PROXY    = "127.0.0.1,localhost"
+
+python manage.py ingest --cg asa-s6 --from latest
+
+
+
+
+
+
+
+
+
+
+
+
+
 # AireApp – Sensores de Bajo Costo (IoT Hub / Event Hub)
 
-Aplicación web en **Python + Flask** con **Dash** para adquirir, almacenar y visualizar **datos crudos** de sensores (S1_PMTHVD … S6_PMTHVD) conectados a **Azure IoT Hub** (compatible con **Event Hub**).  
-Zona horaria fija: **America/Bogota (UTC-5)**.
+Aplicación web en *Python + Flask* con *Dash* para adquirir, almacenar y visualizar *datos crudos* de sensores (S1_PMTHVD … S6_PMTHVD) conectados a *Azure IoT Hub* (compatible con *Event Hub*).  
+Zona horaria fija: *America/Bogota (UTC-5)*.
 
-> **Disclaimer:** Datos indicativos sin corrección; no equivalen a estaciones de referencia (IDEAM Res. 2254 de 2017, guías OMS).
+> *Disclaimer:* Datos indicativos sin corrección; no equivalen a estaciones de referencia (IDEAM Res. 2254 de 2017, guías OMS).
 
 ## 1) Requisitos
-- Python **3.11+**
+- Python *3.11+*
 - (Windows) PowerShell / (Linux) bash
 - Acceso a Azure IoT Hub compatible con Event Hub
 
 ## 2) Instalación rápida
 
-```bash
+bash
 git clone <este_repo> aireapp
 cd aireapp
 ##============================================================================================================
@@ -50,5 +90,5 @@ conectados a **Azure IoT Hub** (vía punto **Compatible con Event Hubs**). La zo
 - **API REST** (endpoints en Flask, p. ej. `/api/series`) expone series de tiempo.
 - **UI** con **Dash/Plotly**: gráficos de PM2.5, PM10, temperatura, humedad, etc.
 
-```text
+text
 Dispositivos → IoT Hub → Event Hub → Ingesta → Base de Datos → API → Dash

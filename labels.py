@@ -3,7 +3,7 @@
 FRIENDLY_LABELS = {
     "S1_PMTHVD": "Colegio Parnaso",
     "S2_PMTHVD": "GRB_LLenadero Ppal",
-    "S3_PMTHVD": "Barrio Yariguies",
+    "S3_PMTHVD": "GRB_B. Yariguies",
     "S4_PMTHVD": "GRB_B. Rosario",
     "S5_PMTHVD": "GRB_PTAR",
     "S6_PMTHVD": "ICPET",

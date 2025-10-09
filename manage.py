@@ -6,7 +6,7 @@ import click
 from dotenv import load_dotenv, find_dotenv
 
 # Carga variables de entorno desde .env (sin sobrescribir las ya definidas)
-load_dotenv(find_dotenv(), override=False)
+load_dotenv(find_dotenv(), override=True)
 
 # Importes locales
 from ingest import consume  # servicio de ingesta

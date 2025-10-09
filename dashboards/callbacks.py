@@ -57,7 +57,7 @@ COMMON_LAYOUT = dict(
     colorway=COLORWAY,
     uirevision="keep",  # se sobreescribe con una clave dinámica por figura
     transition=dict(duration=0),
-    margin=dict(l=50, r=16, t=48, b=32),
+    margin=dict(l=50, r=16, t=48, b=40),
     legend=dict(orientation="h", y=1.02, yanchor="bottom",
                 x=0, xanchor="left", traceorder="normal"),
     plot_bgcolor="rgba(0,0,0,0)",
@@ -120,7 +120,7 @@ def register_callbacks(dash_app, flask_app):
         prevent_initial_call=False,
     )
     def _last_update(_n, _c):
-        return datetime.now(BOGOTA).strftime("Última actualización: %Y-%m-%d %H:%M:%S (America/Bogota)")
+        return datetime.now(BOGOTA).strftime("Última actualización: %Y-%m-%d %H:%M:%S (América/Bogotá)")
 
     @dash_app.callback(
         Output("graph-pm", "figure"),
@@ -220,12 +220,34 @@ def register_callbacks(dash_app, flask_app):
                         opacity=0.70,
                         hovertemplate="%{x|%H:%M} — %{y:.1f} µg/m³<extra>%{fullData.name}</extra>",
                     ))
+##===========================================================================
+    ## Eje fijo
 
-        fig_pm.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_pm.data)), yaxis_title="µg/m³")
-        fig_pm.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
-                            spikemode="across", spikesnap="cursor")
-        fix_axis_y(fig_pm, low=0, high=100, tick=10, lock=True)
+##        fig_pm.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_pm.data)), yaxis_title=" Material Particulado µg/m³")
+##        fig_pm.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
+##                            spikemode="across", spikesnap="cursor")
+##        fix_axis_y(fig_pm, low=0, high=100, tick=10, lock=True)
+##        fig_pm.update_layout(uirevision=rev)
+##==========================================================================
+        fig_pm.update_layout(
+            **COMMON_LAYOUT,
+            hovermode=pick_hovermode(len(fig_pm.data)),
+            yaxis_title="Material particulado(µg/m³)",
+    )
+        fig_pm.update_xaxes(
+            range=[x0, x1],
+            tickformat="%H:%M",
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+    )
+
+# Eje Y dinámico 
+        fig_pm.update_yaxes(autorange=True, fixedrange=False)
+
         fig_pm.update_layout(uirevision=rev)
+
+        
 
         # ========== RH ==========
         fig_rh = go.Figure()
@@ -241,7 +263,7 @@ def register_callbacks(dash_app, flask_app):
             ))
 
         fig_rh.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_rh.data)),
-                             yaxis_title="Humedad relativa(%)", title="Humedad relativa")
+                             yaxis_title="Humedad Relativa(%)")
         fig_rh.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
                             spikemode="across", spikesnap="cursor")
         fig_rh.update_layout(uirevision=rev)
@@ -260,7 +282,7 @@ def register_callbacks(dash_app, flask_app):
             ))
 
         fig_temp.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_temp.data)),
-                               yaxis_title="Temperatura (°C)", title="Temperatura")
+                               yaxis_title="Temperatura (°C)")
         fig_temp.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
                               spikemode="across", spikesnap="cursor")
         fig_temp.update_layout(uirevision=rev)
