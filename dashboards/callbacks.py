@@ -1,9 +1,13 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 from dash import Input, Output, State, no_update, ctx
 import plotly.graph_objects as go
 from labels import label_for  # nombres amigables
+
+# NEW: leer directo de la BD
+from db import db
+from models import Measurement, SensorChannel
 
 BOGOTA = ZoneInfo("America/Bogota")
 
@@ -71,41 +75,124 @@ COMMON_LAYOUT = dict(
     ),
 )
 
+# ---------------- helpers BD ---------------- #
 
-def _fetch_points_for_range(sess, url, base_params, start_date: str, end_date: str):
-    """Intenta con start/end; si no, día a día con 'date=' y concatena."""
+def _parse_channels(code: str | None):
+    if not code:
+        return [SensorChannel.Um1, SensorChannel.Um2]
+    q = str(code).strip().lower()
+    if q in ("um1", "sensor1", "s1"):
+        return [SensorChannel.Um1]
+    if q in ("um2", "sensor2", "s2"):
+        return [SensorChannel.Um2]
+    return [SensorChannel.Um1, SensorChannel.Um2]
+
+
+def _fetch_points_for_range(flask_app, base_params, start_date: str, end_date: str):
+    """
+    Lee DIRECTO de la BD. Intenta:
+      A) agregar a 1 min por (device_id, Um);
+      B) si queda vacío/no numérico, devuelve crudo (sin resample).
+    Devuelve list[dict]: ts, device_id, Um, pm25, pm10, temp, rh
+    """
+    devices = [d for d in (base_params.get("device_id") or "").split(",") if d]
+    channels = _parse_channels(base_params.get("sensor_channel"))
+    variables = [v.strip().lower() for v in (base_params.get("vars") or "").split(",")]
+    if not variables:
+        variables = ["pm25", "pm10", "temp", "rh"]
+
+    start_local, end_local = fixed_bounds(start_date, end_date)
+
+    with flask_app.app_context():
+        qry = (
+            db.session.query(Measurement)
+            .filter(
+                Measurement.fechah_local >= start_local,
+                Measurement.fechah_local <= end_local,
+                Measurement.sensor_channel.in_(channels),
+            )
+            .order_by(Measurement.fechah_local.asc())
+        )
+        if devices:
+            qry = qry.filter(Measurement.device_id.in_(devices))
+        rows = qry.all()
+
+    if not rows:
+        return []
+
+    # ---- DataFrame base
+    recs = []
+    for r in rows:
+        recs.append({
+            "ts": r.fechah_local,  # ya en hora local
+            "device_id": r.device_id,
+            "Um": r.sensor_channel.name,
+            "pm25": getattr(r, "pm25", None),
+            "pm10": getattr(r, "pm10", None),
+            "temp": getattr(r, "temp", None),
+            "rh": getattr(r, "rh", None),
+        })
+    df = pd.DataFrame(recs)
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+    # Normalizar tz (por si algún registro quedó naive):
     try:
-        params_range = base_params.copy()
-        params_range["start"] = start_date
-        params_range["end"] = end_date
-        r = sess.get(url, query_string=params_range)
-        js = r.get_json() or {}
-        pts = js.get("points", [])
-        if pts:
-            return pts
+        if df["ts"].dt.tz is None:
+            df["ts"] = df["ts"].dt.tz_localize(BOGOTA)
+        else:
+            df["ts"] = df["ts"].dt.tz_convert(BOGOTA)
     except Exception:
-        pass
+        df["ts"] = pd.to_datetime(df["ts"]).dt.tz_localize(BOGOTA)
 
-    all_pts = []
-    try:
-        d0 = datetime.strptime(start_date, "%Y-%m-%d").date()
-        d1 = datetime.strptime(end_date, "%Y-%m-%d").date()
-    except Exception:
-        return all_pts
+    df = df.set_index("ts").sort_index()
 
-    d = d0
-    while d <= d1:
-        p = base_params.copy()
-        p["date"] = d.strftime("%Y-%m-%d")
-        try:
-            rr = sess.get(url, query_string=p)
-            jj = rr.get_json() or {}
-            all_pts.extend(jj.get("points", []))
-        except Exception:
-            pass
-        d += timedelta(days=1)
+    # ---- Intento A: resample 1 min
+    idx = pd.date_range(start_local, end_local, freq="1min", tz=BOGOTA)
+    out_rows = []
+    had_numeric = False
 
-    return all_pts
+    for (dev, um), g in df.groupby(["device_id", "Um"]):
+        g1 = (
+            g[["pm25", "pm10", "temp", "rh"]]
+            .apply(pd.to_numeric, errors="coerce")
+            .resample("1min")
+            .mean()
+            .reindex(idx)
+        )
+        if not g1.empty and g1.notna().any().any():
+            had_numeric = True
+        for ts, row in g1.iterrows():
+            item = {"ts": ts.isoformat(), "device_id": dev, "Um": um}
+            for v in variables:
+                val = row.get(v, None)
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    item[v] = None
+                else:
+                    try:
+                        item[v] = round(float(val), 3)
+                    except Exception:
+                        item[v] = None
+            out_rows.append(item)
+
+    if had_numeric:
+        return out_rows
+
+    # ---- Intento B: devolver crudo (sin resample) para que al menos pinte
+    out_rows = []
+    df_raw = df.reset_index()  # ts, device_id, Um, vars...
+    for _, row in df_raw.iterrows():
+        item = {
+            "ts": pd.to_datetime(row["ts"]).tz_convert(BOGOTA).isoformat(),
+            "device_id": row["device_id"],
+            "Um": row["Um"],
+        }
+        for v in variables:
+            try:
+                val = float(row.get(v, None))
+                item[v] = round(val, 3)
+            except Exception:
+                item[v] = None
+        out_rows.append(item)
+    return out_rows
 
 
 def _revkey(start_date: str, end_date: str) -> str:
@@ -136,19 +223,17 @@ def register_callbacks(dash_app, flask_app):
         Input("btn-refresh", "n_clicks"),   # botón “Actualizar ahora”
         Input("intv", "n_intervals"),       # auto-refresh
 
-        # Fechas como INPUTS (así leemos los nuevos valores tras limpiar/aplicar)
+        # Fechas como INPUTS
         Input("dp-range", "start_date"),
         Input("dp-range", "end_date"),
         prevent_initial_call=False,
     )
     def _update(devices, channel, pm_sel, _n_apply, _n_clear, _n_refresh, _n_intv,
                 start_date, end_date):
-        # Si no hay equipos seleccionados
         if not devices:
             return no_update, no_update, no_update
 
-        # Si el disparador NO es aplicar/limpiar/refresh/interval/equipos/radios
-        # y sólo cambió el datepicker (usuario moviendo fechas), no actualizamos.
+        # solo triggers válidos
         trigger_ids_ok = {
             "btn-apply", "btn-clear", "btn-refresh", "intv",
             "ddl-devices", "rdo-channel", "rdo-pm"
@@ -157,7 +242,7 @@ def register_callbacks(dash_app, flask_app):
         if trig not in trigger_ids_ok and trig is not None:
             return no_update, no_update, no_update
 
-        # fallbacks de fechas
+        # fechas
         if not start_date and end_date:
             start_date = end_date
         if not end_date and start_date:
@@ -167,17 +252,13 @@ def register_callbacks(dash_app, flask_app):
             start_date = end_date = today
 
         base_params = {
-            "device_id": ",".join(devices),
-            "sensor_channel": channel,       # sigue siendo Um1/Um2/ambos
+            "device_id": ",".join(devices if isinstance(devices, (list, tuple)) else [devices]),
+            "sensor_channel": channel,       # Um1 / Um2 / ambos
             "vars": "pm25,pm10,temp,rh",
         }
 
-        with flask_app.test_request_context():
-            url = "/api/series"
-        sess = flask_app.test_client()
-
-        # obtiene los puntos (con soporte para ambas variantes de API)
-        points = _fetch_points_for_range(sess, url, base_params, start_date, end_date)
+        # Lee DIRECTO de BD
+        points = _fetch_points_for_range(flask_app, base_params, start_date, end_date)
 
         df = pd.DataFrame(points)
         if df.empty:
@@ -185,7 +266,6 @@ def register_callbacks(dash_app, flask_app):
         if "ts" in df.columns:
             df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
 
-        # Rango X para los tres gráficos y clave de uirevision por rango
         x0, x1 = fixed_bounds(start_date, end_date)
         rev = _revkey(start_date, end_date)
 
@@ -204,68 +284,53 @@ def register_callbacks(dash_app, flask_app):
                 dash_style = DASH_BY_UM.get(str(um), "solid")
                 base = f"{friendly} {um_label(um)}"
 
-                if want_pm25:
+                if want_pm25 and ("pm25" in sub):
                     fig_pm.add_trace(go.Scatter(
                         x=sub["ts"], y=sub["pm25"], mode="lines",
                         name=f"{base} PM2.5",
                         line=dict(color=dev_color, width=2.2, dash=dash_style),
                         opacity=0.95,
-                        hovertemplate="%{x|%H:%M} — %{y:.1f} µg/m³<extra>%{fullData.name}</extra>",
+                        hovertemplate="%{x|%m-%d %H:%M} — %{y:.1f} µg/m³<extra>%{fullData.name}</extra>",
                     ))
-                if want_pm10:
+                if want_pm10 and ("pm10" in sub):
                     fig_pm.add_trace(go.Scatter(
                         x=sub["ts"], y=sub["pm10"], mode="lines",
                         name=f"{base} PM10",
                         line=dict(color=dev_color, width=1.2, dash=dash_style),
                         opacity=0.70,
-                        hovertemplate="%{x|%H:%M} — %{y:.1f} µg/m³<extra>%{fullData.name}</extra>",
+                        hovertemplate="%{x|%m-%d %H:%M} — %{y:.1f} µg/m³<extra>%{fullData.name}</extra>",
                     ))
-##===========================================================================
-    ## Eje fijo
 
-##        fig_pm.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_pm.data)), yaxis_title=" Material Particulado µg/m³")
-##        fig_pm.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
-##                            spikemode="across", spikesnap="cursor")
-##        fix_axis_y(fig_pm, low=0, high=100, tick=10, lock=True)
-##        fig_pm.update_layout(uirevision=rev)
-##==========================================================================
         fig_pm.update_layout(
             **COMMON_LAYOUT,
             hovermode=pick_hovermode(len(fig_pm.data)),
             yaxis_title="Material particulado(µg/m³)",
-    )
+        )
         fig_pm.update_xaxes(
             range=[x0, x1],
-            tickformat="%H:%M",
-            showspikes=True,
-            spikemode="across",
-            spikesnap="cursor",
-    )
-
-# Eje Y dinámico 
+            tickformat="%m-%d %H:%M",        # día y hora
+            showspikes=True, spikemode="across", spikesnap="cursor",
+        )
         fig_pm.update_yaxes(autorange=True, fixedrange=False)
-
         fig_pm.update_layout(uirevision=rev)
-
-        
 
         # ========== RH ==========
         fig_rh = go.Figure()
         for dev in sorted(df["device_id"].dropna().unique()):
             friendly = label_for(dev)
             sub = df[df["device_id"] == dev]
-            if sub.empty:
+            if sub.empty or "rh" not in sub:
                 continue
             fig_rh.add_trace(go.Scatter(
                 x=sub["ts"], y=sub["rh"], mode="lines", name=friendly,
                 line=dict(color=color_for_device(dev), width=2.0),
-                hovertemplate="%{x|%H:%M} — %{y:.0f} %<extra>%{fullData.name}</extra>",
+                hovertemplate="%{x|%m-%d %H:%M} — %{y:.0f} %<extra>%{fullData.name}</extra>",
             ))
 
         fig_rh.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_rh.data)),
                              yaxis_title="Humedad Relativa(%)")
-        fig_rh.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
-                            spikemode="across", spikesnap="cursor")
+        fig_rh.update_xaxes(range=[x0, x1], tickformat="%m-%d %H:%M",
+                            showspikes=True, spikemode="across", spikesnap="cursor")
         fig_rh.update_layout(uirevision=rev)
 
         # ========== Temp ==========
@@ -273,18 +338,18 @@ def register_callbacks(dash_app, flask_app):
         for dev in sorted(df["device_id"].dropna().unique()):
             friendly = label_for(dev)
             sub = df[df["device_id"] == dev]
-            if sub.empty:
+            if sub.empty or "temp" not in sub:
                 continue
             fig_temp.add_trace(go.Scatter(
                 x=sub["ts"], y=sub["temp"], mode="lines", name=friendly,
                 line=dict(color=color_for_device(dev), width=2.0),
-                hovertemplate="%{x|%H:%M} — %{y:.1f} °C<extra>%{fullData.name}</extra>",
+                hovertemplate="%{x|%m-%d %H:%M} — %{y:.1f} °C<extra>%{fullData.name}</extra>",
             ))
 
         fig_temp.update_layout(**COMMON_LAYOUT, hovermode=pick_hovermode(len(fig_temp.data)),
                                yaxis_title="Temperatura (°C)")
-        fig_temp.update_xaxes(range=[x0, x1], tickformat="%H:%M", showspikes=True,
-                              spikemode="across", spikesnap="cursor")
+        fig_temp.update_xaxes(range=[x0, x1], tickformat="%m-%d %H:%M",
+                              showspikes=True, spikemode="across", spikesnap="cursor")
         fig_temp.update_layout(uirevision=rev)
 
         return fig_pm, fig_rh, fig_temp
