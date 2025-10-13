@@ -52,11 +52,13 @@ class Measurement(db.Model):
     )
 
     __table_args__ = (
-        # Evita duplicados por equipo/canal/instante (clave “natural”)
+        # Evita duplicados por equipo/canal/instante (clave "natural")
         UniqueConstraint("device_id", "sensor_channel", "fechah_local", name="uq_device_channel_ts"),
         # Búsquedas rápidas por rango temporal y por día
         Index("idx_fechah_local", "fechah_local"),
         Index("idx_device_fecha", "device_id", "fecha"),
+        # Índice compuesto para optimizar verificación de duplicados en ingesta
+        Index("idx_duplicate_check", "device_id", "sensor_channel", "fechah_local"),
     )
 
 

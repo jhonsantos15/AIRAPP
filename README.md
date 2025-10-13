@@ -7,10 +7,20 @@ python manage.py runserver --port 5000
 ##===================================================================
 ##===================================================================
 # INICIALIZAR TERMINAL DOS (INGESTA)
+# ⭐ RECOMENDADO: Todos los consumer groups para capturar los 6 sensores
 py -3.11 -m venv .venv
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
 .\.venv\Scripts\Activate.ps1 
-python manage.py ingest --cg asa-s6 --from latest
+python manage.py ingest --cg asa-s1,asa-s2,asa-s3,asa-s4,asa-s5,asa-s6 --from latest
+
+# NOTA: Cada consumer group recibe datos de todos los dispositivos (comportamiento de IoT Hub)
+# El filtrado se hace por ALLOWED_DEVICES en .env
+# S1_PMTHVD: Colegio Parnaso
+# S2_PMTHVD: GRB_LLenadero Ppal
+# S3_PMTHVD: Barrio Yariguies  
+# S4_PMTHVD: GRB_B. Rosario
+# S5_PMTHVD: GRB_PTAR
+# S6_PMTHVD: ICPET
 ##===================================================================
 
 

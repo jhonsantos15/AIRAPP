@@ -154,19 +154,77 @@ def _effective_verify() -> Union[bool, str]:
 
 # ---------- Persistencia ----------
 def _save_rows(rows: List[Measurement]):
-    for r in rows:
-        exists = (
-            Measurement.query.filter_by(
-                device_id=r.device_id,
-                sensor_channel=r.sensor_channel,
-                fechah_local=r.fechah_local,
-            ).first()
-            is not None
-        )
-    # sólo agregamos los que no existan
-        if not exists:
-            db.session.add(r)
-    db.session.commit()
+    """
+    Guarda filas en la BD evitando duplicados.
+    Optimizado con bulk operations y manejo robusto de errores.
+    """
+    if not rows:
+        return
+    
+    try:
+        # Extraer las claves únicas de las filas a insertar
+        keys_to_check = [
+            (r.device_id, r.sensor_channel, r.fechah_local)
+            for r in rows
+        ]
+        
+        # Consulta optimizada con tuple_ para comparación eficiente
+        from sqlalchemy import tuple_
+        
+        existing = db.session.query(
+            Measurement.device_id,
+            Measurement.sensor_channel,
+            Measurement.fechah_local
+        ).filter(
+            tuple_(
+                Measurement.device_id,
+                Measurement.sensor_channel,
+                Measurement.fechah_local
+            ).in_(keys_to_check)
+        ).all()
+        
+        # Convertir a set para búsqueda O(1)
+        existing_keys = set(existing)
+        
+        # Filtrar solo las filas nuevas
+        new_rows = [
+            r for r in rows
+            if (r.device_id, r.sensor_channel, r.fechah_local) not in existing_keys
+        ]
+        
+        # Inserción en batch
+        if new_rows:
+            db.session.bulk_save_objects(new_rows)
+            db.session.commit()
+            logger.debug(f"Insertadas {len(new_rows)} filas nuevas de {len(rows)} totales")
+        else:
+            logger.debug(f"0 filas nuevas de {len(rows)} totales (todos duplicados)")
+            
+    except Exception as e:
+        # Rollback en caso de error para limpiar la sesión
+        db.session.rollback()
+        logger.error(f"Error guardando batch, reintentando uno por uno: {e}")
+        
+        # Fallback: insertar uno por uno (más lento pero seguro)
+        inserted = 0
+        for r in rows:
+            try:
+                exists = db.session.query(Measurement).filter_by(
+                    device_id=r.device_id,
+                    sensor_channel=r.sensor_channel,
+                    fechah_local=r.fechah_local,
+                ).first()
+                
+                if not exists:
+                    db.session.add(r)
+                    db.session.commit()
+                    inserted += 1
+            except Exception as inner_e:
+                db.session.rollback()
+                logger.warning(f"No se pudo insertar fila: {inner_e}")
+                
+        if inserted > 0:
+            logger.info(f"Insertadas {inserted} filas en modo fallback")
 
 # ---------- Start position ----------
 def _normalize_start_position(s: Optional[str]) -> Union[str, datetime]:
@@ -218,6 +276,11 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
             "desde IoT Hub (Puntos de conexión integrados) y asegúrese de que incluya EntityPath=...."
         )
 
+    logger.info("=" * 80)
+    logger.info(f"CONSUMER GROUPS ACTIVOS: {', '.join(consumer_groups)}")
+    logger.info(f"Cada CG procesará TODOS los dispositivos permitidos en ALLOWED_DEVICES")
+    logger.info("=" * 80)
+
     http_proxy = parse_proxy_env(target_host=meta["host"])
     if http_proxy:
         logger.info(f"Proxy configurado para WebSocket: {http_proxy['proxy_hostname']}:{http_proxy['proxy_port']}")
@@ -247,22 +310,56 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                 connection_verify=connection_verify,              # False | ruta CA | True
             )
 
-            # Métricas por minuto
+            # Métricas y batch buffer
             window_start = time.time()
             msgs_in_window = 0
+            
+            # Buffer para procesamiento por lotes
+            batch_buffer = []
+            BATCH_SIZE = 50  # Procesar cada 50 mensajes
+            last_checkpoint_time = time.time()
+            CHECKPOINT_INTERVAL = 30  # Checkpoint cada 30 segundos
+
+            def _flush_batch(partition_context=None, event=None, force=False):
+                """Procesa el buffer de mensajes acumulados"""
+                nonlocal batch_buffer, msgs_in_window, last_checkpoint_time
+                
+                if not batch_buffer and not force:
+                    return
+                
+                if batch_buffer:
+                    try:
+                        _save_rows(batch_buffer)
+                        msgs_in_window += len(batch_buffer)
+                        batch_buffer = []
+                    except Exception as e:
+                        logger.exception(f"Error al guardar batch: {e}")
+                        batch_buffer = []
+                
+                # Checkpoint periódico (no en cada mensaje)
+                now = time.time()
+                if partition_context and event and (force or (now - last_checkpoint_time) >= CHECKPOINT_INTERVAL):
+                    try:
+                        partition_context.update_checkpoint(event)
+                        last_checkpoint_time = now
+                    except Exception as e:
+                        logger.warning(f"Error en checkpoint: {e}")
 
             def _flush_metrics(force: bool = False):
                 nonlocal window_start, msgs_in_window
                 now = time.time()
                 if force or (now - window_start) >= 60:
-                    logger.info(f"[{cg}] Último minuto: {msgs_in_window} mensajes persistidos")
+                    if msgs_in_window > 0:
+                        logger.info(f"[{cg}] Último minuto: {msgs_in_window} mensajes persistidos")
                     window_start = now
                     msgs_in_window = 0
 
             def on_event(partition_context, event):
-                nonlocal msgs_in_window
+                nonlocal batch_buffer
                 if event is None:
-                    _flush_metrics()  # heartbeat
+                    # Heartbeat: procesar buffer pendiente y métricas
+                    _flush_batch(partition_context, event, force=True)
+                    _flush_metrics()
                     return
                 try:
                     body = event.body_as_str(encoding="UTF-8")
@@ -281,7 +378,7 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                     payload_device = payload.get("DeviceId") or payload.get("deviceId")
                     device_id = payload_device or device_from_sys
 
-                    # Filtro opcional
+                    # Filtro por ALLOWED_DEVICES (todos los sensores permitidos)
                     if ALLOWED and device_id and device_id not in ALLOWED:
                         return
 
@@ -313,11 +410,12 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                     if not rows:
                         rows.append(Measurement(**base, sensor_channel=SensorChannel.Um1))
 
-                    _save_rows(rows)
-                    msgs_in_window += 1
+                    # Agregar al buffer en lugar de guardar inmediatamente
+                    batch_buffer.extend(rows)
 
-                    # checkpoint solo tras persistir
-                    partition_context.update_checkpoint(event)
+                    # Procesar batch cuando alcance el tamaño deseado
+                    if len(batch_buffer) >= BATCH_SIZE:
+                        _flush_batch(partition_context, event)
 
                     _flush_metrics()
                 except Exception as e:
@@ -335,13 +433,16 @@ def consume(consumer_groups: Iterable[str], start_position: Optional[str] = None
                         max_wait_time=60,           # heartbeat/métricas cada 60s
                     )
             except KeyboardInterrupt:
-                logger.info("Ingesta interrumpida por usuario")
+                logger.info(f"[{cg}] Ingesta interrumpida por usuario. Procesando buffer pendiente...")
+                _flush_batch(force=True)
             except Exception as e:
                 logger.exception(
                     f"Fallo de conexión (host={meta['host']}, CG={cg}, policy={meta['sak_name']}): {e}"
                 )
+                _flush_batch(force=True)
             finally:
                 try:
+                    _flush_batch(force=True)
                     _flush_metrics(force=True)
                 except Exception:
                     pass
