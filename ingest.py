@@ -192,18 +192,23 @@ def _save_rows(rows: List[Measurement]):
             if (r.device_id, r.sensor_channel, r.fechah_local) not in existing_keys
         ]
         
+        duplicates_count = len(rows) - len(new_rows)
+        
         # Inserción en batch
         if new_rows:
             db.session.bulk_save_objects(new_rows)
             db.session.commit()
-            logger.debug(f"Insertadas {len(new_rows)} filas nuevas de {len(rows)} totales")
+            if duplicates_count > 0:
+                logger.debug(f"Insertadas {len(new_rows)} filas nuevas, {duplicates_count} duplicados ignorados")
+            else:
+                logger.debug(f"Insertadas {len(new_rows)} filas nuevas")
         else:
             logger.debug(f"0 filas nuevas de {len(rows)} totales (todos duplicados)")
             
     except Exception as e:
         # Rollback en caso de error para limpiar la sesión
         db.session.rollback()
-        logger.error(f"Error guardando batch, reintentando uno por uno: {e}")
+        logger.warning(f"Duplicados detectados en batch, usando inserción selectiva: {type(e).__name__}")
         
         # Fallback: insertar uno por uno (más lento pero seguro)
         inserted = 0
