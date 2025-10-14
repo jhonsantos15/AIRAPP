@@ -98,6 +98,74 @@ def _xaxis_format(start_date: str, end_date: str) -> dict:
     
     Reglas optimizadas para legibilidad:
     - 1 día: formato hora cada 2 horas (%H:%M)
+    - 2-7 días: formato mes-día y hora (%m-%d %H:%M)
+    - Más de 7 días: solo fecha (%Y-%m-%d)
+    """
+    if not start_date or not end_date:
+        return {}
+    
+    try:
+        s = datetime.strptime(start_date, "%Y-%m-%d")
+        e = datetime.strptime(end_date, "%Y-%m-%d")
+        days = (e - s).days
+        
+        if days == 0:
+            return {"tickformat": "%H:%M", "dtick": 7200000}  # 2 horas
+        elif days <= 3:
+            return {"tickformat": "%m-%d %H:%M", "dtick": 14400000}  # 4 horas
+        elif days <= 7:
+            return {"tickformat": "%m-%d", "dtick": 86400000}  # 1 día
+        else:
+            return {"tickformat": "%Y-%m-%d", "dtick": 86400000 * 2}  # 2 días
+    except Exception:
+        return {}
+
+
+def _insert_gaps_for_plotly(timestamps, values, gap_threshold_minutes=15):
+    """
+    Inserta valores None en los arrays cuando hay gaps temporales significativos.
+    
+    Esto fuerza a Plotly a NO dibujar líneas entre puntos con gaps de tiempo.
+    
+    Args:
+        timestamps: Serie de pandas con timestamps
+        values: Serie de pandas con valores
+        gap_threshold_minutes: Umbral en minutos para considerar un gap
+        
+    Returns:
+        Tuple (x_vals, y_vals) con None insertados en los gaps
+    """
+    if len(timestamps) == 0:
+        return [], []
+    
+    x_vals = []
+    y_vals = []
+    gap_threshold = timedelta(minutes=gap_threshold_minutes)
+    
+    prev_ts = None
+    for ts, val in zip(timestamps, values):
+        if prev_ts is not None:
+            # Calcular diferencia temporal
+            time_diff = ts - prev_ts
+            
+            # Si hay un gap significativo, insertar None
+            if time_diff > gap_threshold:
+                x_vals.append(None)
+                y_vals.append(None)
+        
+        x_vals.append(ts)
+        y_vals.append(val)
+        prev_ts = ts
+    
+    return x_vals, y_vals
+
+
+def _xaxis_format(start_date: str, end_date: str) -> dict:
+    """
+    Retorna configuración del eje X adaptativa según el rango de fechas.
+    
+    Reglas optimizadas para legibilidad:
+    - 1 día: formato hora cada 2 horas (%H:%M)
     - 2-3 días: formato día-mes hora cada 6 horas (%d %b %H:%M)
     - 4-7 días: formato día-mes hora cada 12 horas (%d %b %H:%M)
     - 8-31 días: formato día-mes cada 1 día (%d %b)
@@ -268,16 +336,20 @@ def _fetch_points_for_range(flask_app, channel_value: str, variables: list[str],
         # Convertir a numérico
         g_numeric = g[["pm25", "pm10", "temp", "rh"]].apply(pd.to_numeric, errors="coerce")
         
-        # Resamplear solo donde HAY datos (no rellenar gaps)
-        # Usar dropna() después del resample para eliminar filas sin datos reales
-        g_resampled = g_numeric.resample(freq).mean()
+        # NUEVO ENFOQUE: En lugar de resample que rellena gaps,
+        # usar agrupación por timestamp redondeado solo donde hay datos
+        # Esto evita crear puntos artificiales entre mediciones
         
-        # CRÍTICO: Eliminar filas donde TODOS los valores son NaN
-        # Esto evita crear puntos artificiales en gaps de datos
-        g_resampled = g_resampled.dropna(how='all')
+        # Redondear timestamps a la frecuencia deseada
+        g_numeric = g_numeric.copy()
+        g_numeric['ts_rounded'] = g_numeric.index.floor(freq)
+        
+        # Agrupar por timestamp redondeado y promediar
+        # Esto solo crea grupos donde HAY datos reales
+        g_grouped = g_numeric.groupby('ts_rounded')[["pm25", "pm10", "temp", "rh"]].mean()
         
         # Solo incluir si hay datos válidos
-        if g_resampled.empty or not g_resampled.notna().any().any():
+        if g_grouped.empty or not g_grouped.notna().any().any():
             flask_app.logger.debug(f"[dash] Sin datos válidos para {dev} {um}")
             continue
         
@@ -285,11 +357,7 @@ def _fetch_points_for_range(flask_app, channel_value: str, variables: list[str],
         points_added = 0
         
         # Convertir a lista de diccionarios
-        for ts, row in g_resampled.iterrows():
-            # NO filtrar por rango aquí - el SQL ya lo hizo
-            # El problema es que resample puede crear timestamps fuera de rango
-            # Solo verificar que el timestamp tenga datos válidos
-            
+        for ts, row in g_grouped.iterrows():
             item = {
                 "ts": ts.isoformat(),
                 "device_id": dev,
@@ -315,6 +383,9 @@ def _fetch_points_for_range(flask_app, channel_value: str, variables: list[str],
                 points_added += 1
         
         flask_app.logger.debug(f"[dash] {dev} {um}: agregados {points_added} puntos")
+    
+    flask_app.logger.info(f"[dash] Procesados {len(out_rows)} puntos de datos en total")
+    return out_rows
     
     flask_app.logger.info(f"[dash] Procesados {len(out_rows)} puntos de datos en total")
     return out_rows
@@ -572,8 +643,11 @@ def register_callbacks(dash_app, flask_app):
                 if want_pm25 and ("pm25" in sub.columns):
                     pm25_data = sub["pm25"].dropna()
                     if len(pm25_data) > 0:
+                        # Detectar gaps temporales y agregar None para forzar interrupciones
+                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm25"], gap_threshold_minutes=15)
+                        
                         fig_pm.add_trace(go.Scatter(
-                            x=sub["ts"], y=sub["pm25"], mode="lines",
+                            x=x_vals, y=y_vals, mode="lines",
                             name=f"{base} PM2.5",
                             line=dict(
                                 color=dev_color,
@@ -591,8 +665,11 @@ def register_callbacks(dash_app, flask_app):
                 if want_pm10 and ("pm10" in sub.columns):
                     pm10_data = sub["pm10"].dropna()
                     if len(pm10_data) > 0:
+                        # Detectar gaps temporales y agregar None para forzar interrupciones
+                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm10"], gap_threshold_minutes=15)
+                        
                         fig_pm.add_trace(go.Scatter(
-                            x=sub["ts"], y=sub["pm10"], mode="lines",
+                            x=x_vals, y=y_vals, mode="lines",
                             name=f"{base} PM10",
                             line=dict(
                                 color=dev_color,
@@ -644,8 +721,11 @@ def register_callbacks(dash_app, flask_app):
             # Agrupar por timestamp para promediar si hay múltiples sensores
             sub_grouped = sub.groupby("ts")["rh"].mean().reset_index()
             
+            # Detectar gaps temporales y agregar None para forzar interrupciones
+            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["rh"], gap_threshold_minutes=15)
+            
             fig_rh.add_trace(go.Scatter(
-                x=sub_grouped["ts"], y=sub_grouped["rh"], mode="lines", name=friendly,
+                x=x_vals, y=y_vals, mode="lines", name=friendly,
                 line=dict(color=color_for_device(dev), width=2.0),
                 connectgaps=False,  # No conectar donde no hay datos
                 hovertemplate=f"%{{x|{hfmt}}} — %{{y:.0f}} %<extra>%{{fullData.name}}</extra>",
@@ -676,8 +756,11 @@ def register_callbacks(dash_app, flask_app):
             # Agrupar por timestamp para promediar si hay múltiples sensores
             sub_grouped = sub.groupby("ts")["temp"].mean().reset_index()
             
+            # Detectar gaps temporales y agregar None para forzar interrupciones
+            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["temp"], gap_threshold_minutes=15)
+            
             fig_temp.add_trace(go.Scatter(
-                x=sub_grouped["ts"], y=sub_grouped["temp"], mode="lines", name=friendly,
+                x=x_vals, y=y_vals, mode="lines", name=friendly,
                 line=dict(color=color_for_device(dev), width=2.0),
                 connectgaps=False,  # No conectar donde no hay datos
                 hovertemplate=f"%{{x|{hfmt}}} — %{{y:.1f}} °C<extra>%{{fullData.name}}</extra>",
