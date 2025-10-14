@@ -614,6 +614,26 @@ def register_callbacks(dash_app, flask_app):
         want_pm25 = "pm25" in pm_sel
         want_pm10 = "pm10" in pm_sel
         
+        # Calcular umbral de gap dinámico según rango de fechas
+        try:
+            s = datetime.strptime(start_date, "%Y-%m-%d")
+            e = datetime.strptime(end_date, "%Y-%m-%d")
+            days_range = (e - s).days
+            
+            # Umbral adaptativo: más días = umbral mayor para evitar gaps excesivos
+            if days_range == 0:
+                gap_threshold_minutes = 15  # 1 día: gaps de 15+ minutos
+            elif days_range <= 3:
+                gap_threshold_minutes = 30  # 2-3 días: gaps de 30+ minutos
+            elif days_range <= 7:
+                gap_threshold_minutes = 60  # 4-7 días: gaps de 1+ hora
+            else:
+                gap_threshold_minutes = 180  # 8+ días: gaps de 3+ horas
+                
+            flask_app.logger.info(f"[dash] Gap threshold: {gap_threshold_minutes} min para rango de {days_range} días")
+        except Exception:
+            gap_threshold_minutes = 30  # Fallback seguro
+        
         flask_app.logger.info(f"[dash] Generando gráfica PM - PM2.5: {want_pm25}, PM10: {want_pm10}, sensores: {channel}")
         
         traces_added = 0
@@ -644,7 +664,7 @@ def register_callbacks(dash_app, flask_app):
                     pm25_data = sub["pm25"].dropna()
                     if len(pm25_data) > 0:
                         # Detectar gaps temporales y agregar None para forzar interrupciones
-                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm25"], gap_threshold_minutes=15)
+                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm25"], gap_threshold_minutes=gap_threshold_minutes)
                         
                         fig_pm.add_trace(go.Scatter(
                             x=x_vals, y=y_vals, mode="lines",
@@ -666,7 +686,7 @@ def register_callbacks(dash_app, flask_app):
                     pm10_data = sub["pm10"].dropna()
                     if len(pm10_data) > 0:
                         # Detectar gaps temporales y agregar None para forzar interrupciones
-                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm10"], gap_threshold_minutes=15)
+                        x_vals, y_vals = _insert_gaps_for_plotly(sub["ts"], sub["pm10"], gap_threshold_minutes=gap_threshold_minutes)
                         
                         fig_pm.add_trace(go.Scatter(
                             x=x_vals, y=y_vals, mode="lines",
@@ -722,7 +742,7 @@ def register_callbacks(dash_app, flask_app):
             sub_grouped = sub.groupby("ts")["rh"].mean().reset_index()
             
             # Detectar gaps temporales y agregar None para forzar interrupciones
-            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["rh"], gap_threshold_minutes=15)
+            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["rh"], gap_threshold_minutes=gap_threshold_minutes)
             
             fig_rh.add_trace(go.Scatter(
                 x=x_vals, y=y_vals, mode="lines", name=friendly,
@@ -757,7 +777,7 @@ def register_callbacks(dash_app, flask_app):
             sub_grouped = sub.groupby("ts")["temp"].mean().reset_index()
             
             # Detectar gaps temporales y agregar None para forzar interrupciones
-            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["temp"], gap_threshold_minutes=15)
+            x_vals, y_vals = _insert_gaps_for_plotly(sub_grouped["ts"], sub_grouped["temp"], gap_threshold_minutes=gap_threshold_minutes)
             
             fig_temp.add_trace(go.Scatter(
                 x=x_vals, y=y_vals, mode="lines", name=friendly,
