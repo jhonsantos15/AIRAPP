@@ -373,3 +373,37 @@ def register_callbacks(dash_app, flask_app):
     def _clear_filters(n_clicks):
         today = datetime.now(BOGOTA).strftime("%Y-%m-%d")
         return today, today, "ambos", "ambas"
+
+    # Callbacks para actualizar URLs de botones de reportes con filtros actuales
+    @dash_app.callback(
+        Output("btn-report-hour", "href"),
+        Output("btn-report-24h", "href"),
+        Output("btn-report-7d", "href"),
+        Output("btn-report-month", "href"),
+        Input("ddl-devices", "value"),
+        Input("rdo-channel", "value"),
+    )
+    def _update_report_urls(devices, channel):
+        """Actualiza las URLs de los botones de reporte Excel con los filtros actuales."""
+        # Construir parámetros de query
+        params = []
+        
+        # Agregar dispositivos si hay selección específica
+        if devices and len(devices) > 0:
+            device_str = ",".join(devices)
+            params.append(f"device_id={device_str}")
+        
+        # Agregar canal
+        if channel and channel != "ambos":
+            params.append(f"sensor_channel={channel}")
+        
+        query_string = "&".join(params)
+        base_params = f"&{query_string}" if query_string else ""
+        
+        # URLs para cada período (Excel en lugar de PDF)
+        url_hour = f"/api/reports/excel?period=hour{base_params}"
+        url_24h = f"/api/reports/excel?period=24hours{base_params}"
+        url_7d = f"/api/reports/excel?period=7days{base_params}"
+        url_month = f"/api/reports/excel?period=month{base_params}"
+        
+        return url_hour, url_24h, url_7d, url_month

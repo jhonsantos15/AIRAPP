@@ -102,3 +102,40 @@ conectados a **Azure IoT Hub** (vía punto **Compatible con Event Hubs**). La zo
 
 text
 Dispositivos → IoT Hub → Event Hub → Ingesta → Base de Datos → API → Dash
+
+
+## 2) Características Principales
+
+### 2.1) Visualización en Tiempo Real
+- Dashboard interactivo con gráficos de series temporales
+- Filtros por dispositivo, canal de sensor y rango de fechas
+- Actualización automática cada 60 segundos
+- Vista de PM2.5, PM10, temperatura y humedad relativa
+
+### 2.2) **Reportes en PDF** 🆕
+- Generación de reportes profesionales en formato PDF
+- **Tipos de reportes disponibles:**
+  - Última hora
+  - Últimas 24 horas
+  - Últimos 7 días
+  - Año actual
+  - Personalizado (rango de fechas específico)
+- **Contenido de reportes:**
+  - Estadísticas generales (mínimos, máximos, promedios)
+  - Distribución por dispositivos
+  - Muestra de datos recientes
+  - Filtros aplicables por dispositivo y canal
+- **Acceso:**
+  - Botones en el dashboard
+  - API REST endpoint: `/api/reports/pdf`
+  - Ver documentación completa en `GUIA_REPORTES_PDF.md`
+
+### 2.3) API REST
+- Endpoints para consultar series de tiempo
+- Soporte para agregación de datos
+- Zona horaria consistente (America/Bogota)
+
+### 2.4) Ingesta de Datos
+- Consumo desde Azure Event Hubs
+- Soporte para múltiples consumer groups
+- Manejo de reconexión automática

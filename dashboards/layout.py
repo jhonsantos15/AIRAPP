@@ -124,9 +124,60 @@ def build_layout(app):
                                 className="control right",
                                 children=[
                                     html.Button("Limpiar Filtros", id="btn-clear", n_clicks=0, className="btn ghost"),
-                                    # Nuevo botón con el MISMO estilo que “Limpiar Filtros”
+                                    # Nuevo botón con el MISMO estilo que "Limpiar Filtros"
                                     html.Button("Aplicar Filtros", id="btn-apply", n_clicks=0, className="btn ghost"),
                                     html.Button("Actualizar ahora", id="btn-refresh", n_clicks=0, className="btn primary"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    # ---------- SECCIÓN DE REPORTES EXCEL ----------
+                    html.Div(
+                        className="control-row reports-section",
+                        children=[
+                            html.Div(
+                                className="control full",
+                                children=[
+                                    html.Label("Descargar Reportes en Excel (Minuto a Minuto)", 
+                                             style={"fontWeight": "bold", "marginBottom": "10px"}),
+                                    html.Div(
+                                        className="report-buttons",
+                                        style={"display": "flex", "gap": "10px", "flexWrap": "wrap"},
+                                        children=[
+                                            html.A(
+                                                "Última Hora",
+                                                id="btn-report-hour",
+                                                href="/api/reports/excel?period=hour",
+                                                target="_blank",
+                                                className="btn ghost",
+                                                style={"textDecoration": "none"}
+                                            ),
+                                            html.A(
+                                                "Últimas 24 Horas",
+                                                id="btn-report-24h",
+                                                href="/api/reports/excel?period=24hours",
+                                                target="_blank",
+                                                className="btn ghost",
+                                                style={"textDecoration": "none"}
+                                            ),
+                                            html.A(
+                                                "Últimos 7 Días",
+                                                id="btn-report-7d",
+                                                href="/api/reports/excel?period=7days",
+                                                target="_blank",
+                                                className="btn ghost",
+                                                style={"textDecoration": "none"}
+                                            ),
+                                            html.A(
+                                                "Mes Actual",
+                                                id="btn-report-month",
+                                                href="/api/reports/excel?period=month",
+                                                target="_blank",
+                                                className="btn ghost",
+                                                style={"textDecoration": "none"}
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                         ],

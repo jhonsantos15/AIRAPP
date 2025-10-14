@@ -8,13 +8,15 @@ from dotenv import load_dotenv
 # Cargar .env lo antes posible
 load_dotenv()
 
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, send_file
 from flask_migrate import Migrate
 
 from db import db, init_engine_and_session
 from models import Measurement, SensorChannel
 from dashboards.layout import build_layout
 from dashboards.callbacks import register_callbacks
+from reports import generate_pdf_report
+from reports_excel import generate_excel_report
 
 # -------- Constantes --------
 BOGOTA = ZoneInfo("America/Bogota")
@@ -275,6 +277,125 @@ def create_app() -> Flask:
             return jsonify({"tz": "America/Bogota", "points": out_rows})
 
         return jsonify({"error": "agg debe ser 'none' o '1min'"}), 400
+
+    # ------------------ API: Descargar reportes en PDF ------------------ #
+    @app.get("/api/reports/pdf")
+    def api_reports_pdf():
+        """
+        Genera y descarga un reporte en PDF.
+        Params:
+          - period: 'hour' | '24hours' | '7days' | 'year' | 'custom'
+          - device_id: CSV opcional (ej: S1_PMTHVD,S2_PMTHVD)
+          - sensor_channel: 'um1' | 'um2' | 'ambos' (default: ambos)
+          - start_date: YYYY-MM-DD (requerido si period=custom)
+          - end_date: YYYY-MM-DD (requerido si period=custom)
+        """
+        period = request.args.get("period", "24hours").strip().lower()
+        q_devices = request.args.get("device_id", "").strip()
+        q_channel = request.args.get("sensor_channel", "ambos").strip()
+        
+        devices = _parse_devices(q_devices)
+        channels = _parse_channels(q_channel)
+        
+        start_date = None
+        end_date = None
+        
+        if period == "custom":
+            start_s = request.args.get("start_date")
+            end_s = request.args.get("end_date")
+            if not start_s or not end_s:
+                return jsonify({"error": "start_date y end_date son requeridos para period=custom"}), 400
+            try:
+                start_date = datetime.strptime(start_s, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_s, "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"error": "formato de fecha inválido (YYYY-MM-DD)"}), 400
+        
+        try:
+            pdf_buffer = generate_pdf_report(
+                period=period,
+                devices=devices,
+                start_date=start_date,
+                end_date=end_date,
+                channels=channels
+            )
+            
+            # Generar nombre de archivo
+            timestamp = datetime.now(BOGOTA).strftime("%Y%m%d_%H%M%S")
+            filename = f"reporte_calidad_aire_{period}_{timestamp}.pdf"
+            
+            app.logger.info(f"Reporte PDF generado: {filename}")
+            
+            return send_file(
+                pdf_buffer,
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=filename
+            )
+        except Exception as e:
+            app.logger.error(f"Error generando reporte PDF: {e}", exc_info=True)
+            return jsonify({"error": f"Error generando reporte: {str(e)}"}), 500
+
+    # ------------------ API: Descargar reportes en Excel (MINUTO A MINUTO) ------------------ #
+    @app.get("/api/reports/excel")
+    def api_reports_excel():
+        """
+        Genera y descarga un reporte en Excel con TODOS los datos minuto a minuto.
+        Params:
+          - period: 'hour' | '24hours' | 'month' | '7days' | 'year' | 'custom'
+          - device_id: CSV opcional (ej: S1_PMTHVD,S2_PMTHVD)
+          - sensor_channel: 'um1' | 'um2' | 'ambos' (default: ambos)
+          - start_date: YYYY-MM-DD (requerido si period=custom)
+          - end_date: YYYY-MM-DD (requerido si period=custom)
+          - aggregate: 'true' | 'false' (default: true) - Agregar por minuto o datos crudos
+        """
+        period = request.args.get("period", "24hours").strip().lower()
+        q_devices = request.args.get("device_id", "").strip()
+        q_channel = request.args.get("sensor_channel", "ambos").strip()
+        aggregate = request.args.get("aggregate", "true").strip().lower() == "true"
+        
+        devices = _parse_devices(q_devices)
+        channels = _parse_channels(q_channel)
+        
+        start_date = None
+        end_date = None
+        
+        if period == "custom":
+            start_s = request.args.get("start_date")
+            end_s = request.args.get("end_date")
+            if not start_s or not end_s:
+                return jsonify({"error": "start_date y end_date son requeridos para period=custom"}), 400
+            try:
+                start_date = datetime.strptime(start_s, "%Y-%m-%d").date()
+                end_date = datetime.strptime(end_s, "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"error": "formato de fecha inválido (YYYY-MM-DD)"}), 400
+        
+        try:
+            excel_buffer = generate_excel_report(
+                period=period,
+                devices=devices,
+                start_date=start_date,
+                end_date=end_date,
+                channels=channels,
+                aggregate_by_minute=aggregate
+            )
+            
+            # Generar nombre de archivo
+            timestamp = datetime.now(BOGOTA).strftime("%Y%m%d_%H%M%S")
+            filename = f"reporte_calidad_aire_{period}_{timestamp}.xlsx"
+            
+            app.logger.info(f"Reporte Excel generado: {filename}")
+            
+            return send_file(
+                excel_buffer,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name=filename
+            )
+        except Exception as e:
+            app.logger.error(f"Error generando reporte Excel: {e}", exc_info=True)
+            return jsonify({"error": f"Error generando reporte: {str(e)}"}), 500
 
     # ------------------ Dash (tu app actual) ------------------ #
     from dash import Dash

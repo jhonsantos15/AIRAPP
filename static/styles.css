@@ -105,6 +105,22 @@ html, body {
 }
 .btn.ghost:hover{ border-color: var(--primary); color: var(--primary) }
 
+/* Sección de Reportes */
+.reports-section{
+  margin-top: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.report-buttons .btn{
+  min-width: 140px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+.report-buttons .btn:hover{
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(17,182,199,.2);
+}
+
 /* ========== REJILLA 12 COLUMNAS ========== */
 .charts-grid{
   margin-top: 14px;
