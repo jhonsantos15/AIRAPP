@@ -226,7 +226,7 @@ def register_callbacks(dash_app, flask_app):
     def _last_update(_n, _c):
         return datetime.now(BOGOTA).strftime("Última actualización: %Y-%m-%d %H:%M:%S (América/Bogotá)")
 
-    # Ahora SOLO actualiza con: aplicar, refrescar, intervalo o limpiar.
+    # Actualiza con: aplicar, refrescar, intervalo, limpiar O cambio de fechas
     @dash_app.callback(
         Output("graph-pm", "figure"),
         Output("graph-rh", "figure"),
@@ -237,17 +237,17 @@ def register_callbacks(dash_app, flask_app):
         Input("btn-refresh", "n_clicks"),
         Input("intv", "n_intervals"),
         Input("btn-clear", "n_clicks"),
+        Input("dp-range", "start_date"),  # Cambiado de State a Input
+        Input("dp-range", "end_date"),    # Cambiado de State a Input
 
         # Filtros (como State)
         State("ddl-devices", "value"),
         State("rdo-channel", "value"),
         State("rdo-pm", "value"),
-        State("dp-range", "start_date"),
-        State("dp-range", "end_date"),
         prevent_initial_call=False,
     )
-    def _update(n_apply, n_refresh, n_intv, n_clear,
-                devices, channel, pm_sel, start_date, end_date):
+    def _update(n_apply, n_refresh, n_intv, n_clear, start_date, end_date,
+                devices, channel, pm_sel):
 
         # Normalizar entradas
         if not devices:
@@ -279,8 +279,13 @@ def register_callbacks(dash_app, flask_app):
                 f"range={start_date}..{end_date} channel={channel} pm={pm_sel} "
                 f"sel_devices={dev_list} -> devices_in_df={uniq} rows={len(df)}"
             )
-        except Exception:
-            pass
+            # Log adicional para fechas
+            if len(df) > 0:
+                fecha_min = df["ts"].min() if "ts" in df.columns else None
+                fecha_max = df["ts"].max() if "ts" in df.columns else None
+                flask_app.logger.info(f"[dash] datos: fecha_min={fecha_min}, fecha_max={fecha_max}")
+        except Exception as e:
+            flask_app.logger.error(f"[dash] Error en logging: {e}")
 
         x0, x1 = fixed_bounds(start_date, end_date)
         rev = _revkey(start_date, end_date, dev_list, channel, pm_sel, n_apply, n_refresh, n_intv, n_clear)
