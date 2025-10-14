@@ -1,141 +1,139 @@
-##===================================================================
-# INICIALIZAR TERMINAL UNO (SERVIDOR)
-py -3.11 -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
-.\.venv\Scripts\Activate.ps1 
-python manage.py runserver --port 5000
-##===================================================================
-##===================================================================
-# INICIALIZAR TERMINAL DOS (INGESTA)
-# ⭐ RECOMENDADO: Todos los consumer groups para capturar los 6 sensores
-py -3.11 -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
-.\.venv\Scripts\Activate.ps1 
-python manage.py ingest --cg asa-s1,asa-s2,asa-s3,asa-s4,asa-s5,asa-s6 --from latest
+# 🌬️ AireApp - Sistema de Monitoreo de Calidad del Aire
 
-# NOTA: Cada consumer group recibe datos de todos los dispositivos (comportamiento de IoT Hub)
-# El filtrado se hace por ALLOWED_DEVICES en .env
-# S1_PMTHVD: Colegio Parnaso
-# S2_PMTHVD: GRB_LLenadero Ppal
-# S3_PMTHVD: Barrio Yariguies  
-# S4_PMTHVD: GRB_B. Rosario
-# S5_PMTHVD: GRB_PTAR
-# S6_PMTHVD: ICPET
-##===================================================================
+Sistema de monitoreo en tiempo real de calidad del aire con ingesta IoT, API REST y dashboard interactivo.
 
+## 🚀 Inicio Rápido
 
-# En ESTA terminal si la ingesta falla (solo sesión actual)
+### Prerequisitos
 
-Remove-Item Env:\HTTPS_PROXY -ErrorAction SilentlyContinue
-Remove-Item Env:\HTTP_PROXY  -ErrorAction SilentlyContinue
-$env:NO_PROXY = "127.0.0.1,localhost"
+- Python 3.11+
+- Azure IoT Hub (credenciales en `.env`)
 
-$env:HTTPS_PROXY = "http://USUARIO:CLAVE@proxy.real.miempresa.com:80"
-$env:HTTP_PROXY  = $env:HTTPS_PROXY
-$env:NO_PROXY    = "127.0.0.1,localhost"
+### Instalación
 
-python manage.py ingest --cg asa-s6 --from latest
-
-
-
-
-
-
-
-
-
-
-
-
-
-# AireApp – Sensores de Bajo Costo (IoT Hub / Event Hub)
-
-Aplicación web en *Python + Flask* con *Dash* para adquirir, almacenar y visualizar *datos crudos* de sensores (S1_PMTHVD … S6_PMTHVD) conectados a *Azure IoT Hub* (compatible con *Event Hub*).  
-Zona horaria fija: *America/Bogota (UTC-5)*.
-
-> *Disclaimer:* Datos indicativos sin corrección; no equivalen a estaciones de referencia (IDEAM Res. 2254 de 2017, guías OMS).
-
-## 1) Requisitos
-- Python *3.11+*
-- (Windows) PowerShell / (Linux) bash
-- Acceso a Azure IoT Hub compatible con Event Hub
-
-## 2) Instalación rápida
-
-bash
-git clone <este_repo> aireapp
+```powershell
+# Clonar repositorio
+git clone https://github.com/jhonsantos15/AIRAPP.git
 cd aireapp
-##============================================================================================================
-#Para inicializar el proyecto se debe:
-# 1. En una terminal correr el siguiente codigo para poder instalar dependencias en entorno virtual de python:
 
+# Crear entorno virtual
 python -m venv .venv
-. .venv/Scripts/activate        
+.\.venv\Scripts\Activate.ps1
+
+# Instalar dependencias
 pip install -r requirements.txt
 
-# 2. Para levantar el servidor ejecutar:
+# Configurar variables de entorno
+cp .env.example .env
+# Editar .env con tus credenciales de Azure IoT Hub
+```
 
-python manage.py runserver --port 5000
+### Ejecución
 
-# 3. Para consultar la data en tiempo real se requiere realizar la Ingesta (en otra terminal):
-python -m venv .venv
-. .venv/Scripts/activate  
-python manage.py ingest --cg asa-s6 --from latest
-#==============================================================================================================
-# AireApp — Monitoreo de Calidad del Aire (Flask + Dash + Azure IoT Hub/Event Hubs)
+El sistema requiere **3 procesos** corriendo simultáneamente:
 
-Aplicación web en **Python (Flask + Dash)** para adquirir y visualizar datos de sensores de bajo costo
-conectados a **Azure IoT Hub** (vía punto **Compatible con Event Hubs**). La zona horaria se fija en
-**America/Bogota (UTC−05:00)** para toda la aplicación.
+#### Terminal 1: Consumidor IoT (Ingesta de datos)
+```powershell
+python scripts/start_iot_consumer.py --from latest
+```
+Consume eventos desde Azure IoT Hub y los almacena en la base de datos.
 
-> **Aviso técnico**: Los datos son **indicativos**. No sustituyen estaciones de referencia ni redes oficiales.
-> Para comparabilidad normativa considerar la **Resolución IDEAM 2254 de 2017** y guías OMS vigentes.
+#### Terminal 2: Dashboard (Visualización)
+```powershell
+python scripts/start_dashboard.py --debug
+```
+Dashboard interactivo en: http://localhost:8050
 
----
+#### Terminal 3: API REST (Opcional)
+```powershell
+python scripts/start_api.py
+```
+API REST en: http://localhost:8000/docs
 
-## 1) Arquitectura (resumen)
-- **Sensores (S1…S6)** → **Azure IoT Hub** → **Event Hubs compatible**.
-- **Servicio de Ingesta** (`ingest.py`, comando `manage.py ingest`) consume eventos y persiste en la **BD**.
-- **BD** (por defecto **SQLite**; reemplazable por **PostgreSQL** u otro motor).
-- **API REST** (endpoints en Flask, p. ej. `/api/series`) expone series de tiempo.
-- **UI** con **Dash/Plotly**: gráficos de PM2.5, PM10, temperatura, humedad, etc.
+## 📁 Arquitectura
 
-text
-Dispositivos → IoT Hub → Event Hub → Ingesta → Base de Datos → API → Dash
+```
+Frontend (Dash)  ←→  Backend (FastAPI)  ←→  Database (SQLite)
+                          ↓
+                   IoT Hub Service
+                          ↓
+              Azure Event Hub (IoT Hub)
+```
 
+### Estructura del Proyecto
 
-## 2) Características Principales
+```
+aireapp/
+├── src/
+│   ├── api/          # API REST con FastAPI
+│   ├── dashboard/    # Dashboard con Dash/Plotly
+│   ├── iot/          # Consumidor de Azure IoT Hub
+│   ├── services/     # Lógica de negocio
+│   ├── core/         # Configuración, DB, Modelos
+│   ├── schemas/      # Schemas Pydantic
+│   └── utils/        # Utilidades y constantes
+├── scripts/          # Scripts de inicio
+├── migrations/       # Migraciones Alembic
+├── tests/            # Tests unitarios
+└── requirements.txt
+```
 
-### 2.1) Visualización en Tiempo Real
-- Dashboard interactivo con gráficos de series temporales
-- Filtros por dispositivo, canal de sensor y rango de fechas
-- Actualización automática cada 60 segundos
-- Vista de PM2.5, PM10, temperatura y humedad relativa
+## 🔑 Características Principales
 
-### 2.2) **Reportes en PDF** 🆕
-- Generación de reportes profesionales en formato PDF
-- **Tipos de reportes disponibles:**
-  - Última hora
-  - Últimas 24 horas
-  - Últimos 7 días
-  - Año actual
-  - Personalizado (rango de fechas específico)
-- **Contenido de reportes:**
-  - Estadísticas generales (mínimos, máximos, promedios)
-  - Distribución por dispositivos
-  - Muestra de datos recientes
-  - Filtros aplicables por dispositivo y canal
-- **Acceso:**
-  - Botones en el dashboard
-  - API REST endpoint: `/api/reports/pdf`
-  - Ver documentación completa en `GUIA_REPORTES_PDF.md`
+- **Ingesta en Tiempo Real**: Consumo de eventos desde Azure IoT Hub con múltiples consumer groups
+- **Dashboard Interactivo**: Visualización de PM2.5, PM10, temperatura y humedad con actualización automática cada 60 segundos
+- **API REST**: Endpoints para consultar dispositivos, mediciones y generar reportes
+- **Filtros Avanzados**: Selección por dispositivos, sensores, fechas y tipo de material particulado
+- **Resample Inteligente**: Resolución de 1 minuto para día actual, 5min para rangos cortos
+- **Visualización de Gaps**: Las gráficas muestran espacios donde no hay datos (sin interpolación falsa)
 
-### 2.3) API REST
-- Endpoints para consultar series de tiempo
-- Soporte para agregación de datos
-- Zona horaria consistente (America/Bogota)
+## 🛠️ Tecnologías
 
-### 2.4) Ingesta de Datos
-- Consumo desde Azure Event Hubs
-- Soporte para múltiples consumer groups
-- Manejo de reconexión automática
+- **Backend**: Python 3.11, FastAPI, SQLAlchemy
+- **Frontend**: Dash, Plotly
+- **IoT**: Azure IoT Hub, Event Hubs SDK
+- **Base de Datos**: SQLite (desarrollo), PostgreSQL (producción)
+- **Migraciones**: Alembic
+
+## 📊 Dashboard
+
+El dashboard permite:
+- Visualizar datos en tiempo real (con 1 minuto de retraso)
+- Filtrar por período de análisis (solo fechas con datos disponibles)
+- Seleccionar dispositivos específicos
+- Elegir sensores (Sensor 1, Sensor 2)
+- Filtrar por tipo de partícula (PM2.5, PM10)
+- Descargar reportes en Excel
+
+## 🔧 Scripts Útiles
+
+```powershell
+# Verificar dispositivos
+python scripts/check_devices.py
+
+# Verificar datos de hoy
+python scripts/check_data_today.py
+
+# Poblar base de datos (desarrollo)
+python scripts/seed_db.py
+```
+
+## 🐛 Troubleshooting
+
+### El dashboard no muestra datos
+- Verificar que el consumidor IoT esté corriendo
+- Revisar logs en `logs/`
+- Confirmar que hay datos en la base de datos: `python scripts/check_data_today.py`
+
+### Error de conexión a IoT Hub
+- Verificar credenciales en `.env`
+- Confirmar que el Event Hub esté accesible
+- Revisar consumer group configurado
+
+## 📝 Licencia
+
+Proyecto privado - TIP Colombia
+
+## 👥 Autor
+
+Jhon Santos - [@jhonsantos15](https://github.com/jhonsantos15)
