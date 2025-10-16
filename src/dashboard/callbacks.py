@@ -1,5 +1,6 @@
 # src/dashboard/callbacks.py
 from datetime import datetime, timedelta
+import logging
 import pandas as pd
 from dash import Input, Output, State, no_update
 import plotly.graph_objects as go
@@ -8,6 +9,9 @@ from src.utils.labels import label_for
 from src.utils.constants import BOGOTA, COLORWAY, DASH_BY_UM, DEVICE_COLORS, PM_COLORS
 from src.core.database import db
 from src.core.models import Measurement, SensorChannel
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 def color_for_device(device_id: str) -> str:
     """
@@ -45,7 +49,7 @@ COMMON_LAYOUT = dict(
     template="plotly_white",
     colorway=COLORWAY,
     transition=dict(duration=0),
-    margin=dict(l=50, r=16, t=48, b=40),
+    margin=dict(l=100, r=20, t=50, b=50),  # Márgenes optimizados para mostrar títulos de ejes
     legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, xanchor="left", traceorder="normal"),
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)",
@@ -53,8 +57,18 @@ COMMON_LAYOUT = dict(
                     bgcolor="rgba(255,255,255,0.98)", bordercolor="#11B6C7"),
 )
 
-def apply_layout(fig: go.Figure, uirev: str):
-    fig.update_layout(**COMMON_LAYOUT)
+def apply_layout(fig: go.Figure, uirev: str, **extra_layout):
+    """
+    Aplica layout común a la figura y configuraciones adicionales.
+    
+    Args:
+        fig: Figura de Plotly
+        uirev: String de revisión UI para preservar estado de zoom
+        **extra_layout: Parámetros adicionales de layout (ej: yaxis_title, xaxis_title)
+    """
+    # Combinar layout común con extras
+    layout_config = {**COMMON_LAYOUT, **extra_layout}
+    fig.update_layout(**layout_config)
     fig.layout.uirevision = uirev
 
 # ---------------- helpers ---------------- #
@@ -97,11 +111,13 @@ def _xaxis_format(start_date: str, end_date: str) -> dict:
     Retorna configuración del eje X adaptativa según el rango de fechas.
     
     Reglas optimizadas para legibilidad:
-    - 1 día: formato hora cada 2 horas (%H:%M)
-    - 2-7 días: formato mes-día y hora (%m-%d %H:%M)
-    - Más de 7 días: solo fecha (%Y-%m-%d)
+    - 1 día (24h): formato hora prominente cada 3 horas (%H:%M)
+    - 2-3 días: formato mes-día y hora (%d %b %H:%M)
+    - 4-7 días: solo fecha (%d %b)
+    - Más de 7 días: fecha completa (%Y-%m-%d)
     """
     if not start_date or not end_date:
+        logger.info("[dash] _xaxis_format: fechas vacías, retornando {}")
         return {}
     
     try:
@@ -109,15 +125,35 @@ def _xaxis_format(start_date: str, end_date: str) -> dict:
         e = datetime.strptime(end_date, "%Y-%m-%d")
         days = (e - s).days
         
+        logger.info(f"[dash] _xaxis_format: start={start_date}, end={end_date}, days={days}")
+        
         if days == 0:
-            return {"tickformat": "%H:%M", "dtick": 7200000}  # 2 horas
+            # Mismo día: mostrar solo horas cada 2 horas
+            config = {"tickformat": "%H:%M", "dtick": 7200000}
+            logger.info(f"[dash] _xaxis_format: retornando (days=0): {config}")
+            return config
+        elif days == 1:
+            # 24 horas exactas: formato hora prominente cada 3 horas
+            config = {"tickformat": "%H:%M<br>%d %b", "dtick": 10800000}
+            logger.info(f"[dash] _xaxis_format: retornando (days=1): {config}")
+            return config
         elif days <= 3:
-            return {"tickformat": "%m-%d %H:%M", "dtick": 14400000}  # 4 horas
+            # 2-3 días: día + hora cada 6 horas
+            config = {"tickformat": "%d %b<br>%H:%M", "dtick": 21600000}
+            logger.info(f"[dash] _xaxis_format: retornando (days<=3): {config}")
+            return config
         elif days <= 7:
-            return {"tickformat": "%m-%d", "dtick": 86400000}  # 1 día
+            # 4-7 días: solo día cada día
+            config = {"tickformat": "%d %b", "dtick": 86400000}
+            logger.info(f"[dash] _xaxis_format: retornando (days<=7): {config}")
+            return config
         else:
-            return {"tickformat": "%Y-%m-%d", "dtick": 86400000 * 2}  # 2 días
-    except Exception:
+            # Más de 7 días: fecha completa cada 2 días
+            config = {"tickformat": "%Y-%m-%d", "dtick": 86400000 * 2}
+            logger.info(f"[dash] _xaxis_format: retornando (days>7): {config}")
+            return config
+    except Exception as ex:
+        logger.error(f"[dash] _xaxis_format: ERROR: {ex}")
         return {}
 
 
@@ -158,65 +194,6 @@ def _insert_gaps_for_plotly(timestamps, values, gap_threshold_minutes=15):
         prev_ts = ts
     
     return x_vals, y_vals
-
-
-def _xaxis_format(start_date: str, end_date: str) -> dict:
-    """
-    Retorna configuración del eje X adaptativa según el rango de fechas.
-    
-    Reglas optimizadas para legibilidad:
-    - 1 día: formato hora cada 2 horas (%H:%M)
-    - 2-3 días: formato día-mes hora cada 6 horas (%d %b %H:%M)
-    - 4-7 días: formato día-mes hora cada 12 horas (%d %b %H:%M)
-    - 8-31 días: formato día-mes cada 1 día (%d %b)
-    - >31 días: formato mes-año auto (%b %Y)
-    """
-    try:
-        start = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
-        days_diff = (end - start).days
-    except:
-        days_diff = 0
-    
-    if days_diff == 0:
-        # 1 día: mostrar horas cada 2 horas (más legible)
-        return {
-            "tickformat": "%H:%M",
-            "dtick": 7200000,  # 2 horas en milisegundos
-            "tickmode": "linear",
-            "nticks": 12  # Máximo 12 etiquetas
-        }
-    elif days_diff <= 3:
-        # 2-3 días: día-mes con hora cada 6 horas
-        return {
-            "tickformat": "%d %b<br>%H:%M",
-            "dtick": 21600000,  # 6 horas
-            "tickmode": "linear",
-            "nticks": 12
-        }
-    elif days_diff <= 7:
-        # 4-7 días: día-mes con hora cada 12 horas
-        return {
-            "tickformat": "%d %b<br>%H:%M",
-            "dtick": 43200000,  # 12 horas
-            "tickmode": "linear",
-            "nticks": 14
-        }
-    elif days_diff <= 31:
-        # 8-31 días: solo fechas cada día
-        return {
-            "tickformat": "%d %b",
-            "dtick": 86400000,  # 1 día
-            "tickmode": "linear",
-            "nticks": 15
-        }
-    else:
-        # >31 días: mes-año (auto ajusta)
-        return {
-            "tickformat": "%b %Y",
-            "tickmode": "auto",
-            "nticks": 12
-        }
 
 
 def _fetch_points_for_range(flask_app, channel_value: str, variables: list[str],
@@ -714,12 +691,29 @@ def register_callbacks(dash_app, flask_app):
                 font=dict(size=14, color="#666")
             )
 
-        apply_layout(fig_pm, rev)
-        fig_pm.update_layout(hovermode=pick_hovermode(len(fig_pm.data)),
-                             yaxis_title="Material particulado(µg/m³)")
-        fig_pm.update_yaxes(autorange=True, fixedrange=False)
+        apply_layout(
+            fig_pm, 
+            rev, 
+            hovermode=pick_hovermode(len(fig_pm.data)),
+            yaxis=dict(
+                title=dict(
+                    text="Material particulado (µg/m³)",
+                    font=dict(size=14, color="#0F172A"),
+                    standoff=10
+                ),
+                autorange=True,
+                fixedrange=False,
+                showticklabels=True,
+                showgrid=True,
+                gridcolor="#E9EEF5"
+            )
+        )
         fig_pm.update_xaxes(
             range=[x0, x1], 
+            title=dict(
+                text="Fecha y Hora",
+                font=dict(size=12, color="#0F172A")
+            ),
             showspikes=True, 
             spikemode="across", 
             spikesnap="cursor",
@@ -751,11 +745,29 @@ def register_callbacks(dash_app, flask_app):
                 hovertemplate=f"%{{x|{hfmt}}} — %{{y:.0f}} %<extra>%{{fullData.name}}</extra>",
             ))
         
-        apply_layout(fig_rh, rev)
-        fig_rh.update_layout(hovermode=pick_hovermode(len(fig_rh.data)),
-                             yaxis_title="Humedad Relativa(%)")
+        apply_layout(
+            fig_rh, 
+            rev, 
+            hovermode=pick_hovermode(len(fig_rh.data)),
+            yaxis=dict(
+                title=dict(
+                    text="Humedad Relativa (%)",
+                    font=dict(size=14, color="#0F172A"),
+                    standoff=10
+                ),
+                autorange=True,
+                fixedrange=False,
+                showticklabels=True,
+                showgrid=True,
+                gridcolor="#E9EEF5"
+            )
+        )
         fig_rh.update_xaxes(
-            range=[x0, x1], 
+            range=[x0, x1],
+            title=dict(
+                text="Fecha y Hora",
+                font=dict(size=12, color="#0F172A")
+            ),
             showspikes=True, 
             spikemode="across", 
             spikesnap="cursor",
@@ -786,11 +798,29 @@ def register_callbacks(dash_app, flask_app):
                 hovertemplate=f"%{{x|{hfmt}}} — %{{y:.1f}} °C<extra>%{{fullData.name}}</extra>",
             ))
         
-        apply_layout(fig_temp, rev)
-        fig_temp.update_layout(hovermode=pick_hovermode(len(fig_temp.data)),
-                               yaxis_title="Temperatura (°C)")
+        apply_layout(
+            fig_temp, 
+            rev, 
+            hovermode=pick_hovermode(len(fig_temp.data)),
+            yaxis=dict(
+                title=dict(
+                    text="Temperatura (°C)",
+                    font=dict(size=14, color="#0F172A"),
+                    standoff=10
+                ),
+                autorange=True,
+                fixedrange=False,
+                showticklabels=True,
+                showgrid=True,
+                gridcolor="#E9EEF5"
+            )
+        )
         fig_temp.update_xaxes(
-            range=[x0, x1], 
+            range=[x0, x1],
+            title=dict(
+                text="Fecha y Hora",
+                font=dict(size=12, color="#0F172A")
+            ),
             showspikes=True, 
             spikemode="across", 
             spikesnap="cursor",
@@ -813,10 +843,10 @@ def register_callbacks(dash_app, flask_app):
     )
     def _clear_filters(n_clicks):
         """Restablece TODOS los filtros a sus valores por defecto."""
-        # Fechas: últimos 4 días
+        # Fechas: últimas 24 horas (1 día)
         today_dt = datetime.now(BOGOTA)
         today = today_dt.strftime("%Y-%m-%d")
-        start_default = (today_dt - timedelta(days=3)).strftime("%Y-%m-%d")
+        start_default = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         
         # Dispositivos: TODOS los equipos del sistema (S1 a S6)
         # No filtramos por disponibilidad de datos

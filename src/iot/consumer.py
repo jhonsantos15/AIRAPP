@@ -19,8 +19,9 @@ except Exception:
     _DEFAULT_CAFILE = None
 
 from src.core.config import settings
+from src.utils.logging_config import get_app_logger
 
-logger = logging.getLogger(__name__)
+logger = get_app_logger()
 
 
 class EventHubConsumer:

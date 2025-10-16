@@ -20,6 +20,10 @@ class MeasurementResponse(BaseModel):
     pm10: Optional[float] = None
     temp: Optional[float] = None
     rh: Optional[float] = None
+    no2: Optional[float] = None
+    co2: Optional[float] = None
+    vel_viento: Optional[float] = None
+    dir_viento: Optional[float] = None
     
 
 class MeasurementListResponse(BaseModel):

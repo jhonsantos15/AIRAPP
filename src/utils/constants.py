@@ -63,7 +63,7 @@ PM_LABELS = {
 }
 
 # Variables disponibles
-AVAILABLE_VARIABLES = ["pm25", "pm10", "temp", "rh"]
+AVAILABLE_VARIABLES = ["pm25", "pm10", "temp", "rh", "no2", "co2", "vel_viento", "dir_viento"]
 
 # Consumer groups Kafka
 KAFKA_CONSUMER_GROUPS = {

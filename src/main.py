@@ -4,7 +4,6 @@ Refactored Flask application using new modular structure.
 """
 import os
 import logging
-from logging.handlers import RotatingFileHandler
 from datetime import datetime, date, time, timedelta
 from dotenv import load_dotenv
 
@@ -20,8 +19,7 @@ from src.core.database import db, init_engine_and_session
 from src.core.models import Measurement, SensorChannel
 from src.utils.constants import BOGOTA
 from src.utils.labels import get_all_devices
-from src.dashboard.layout import build_layout
-from src.dashboard.callbacks import register_callbacks
+from src.utils.logging_config import setup_flask_logging, get_app_logger
 from src.services.report_service_legacy import generate_pdf_report
 from src.services.report_excel_legacy import generate_excel_report
 
@@ -66,32 +64,6 @@ def _bounds_of_range_local(dstart: date, dend: date) -> tuple[datetime, datetime
     return a, b
 
 
-def setup_logging(app: Flask) -> None:
-    """Configure application logging."""
-    # Extract directory from log file path
-    log_dir = os.path.dirname(settings.log_file)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    
-    file_handler = RotatingFileHandler(
-        settings.log_file,
-        maxBytes=settings.log_max_bytes,
-        backupCount=settings.log_backup_count
-    )
-    
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(getattr(logging, settings.log_level))
-    
-    app.logger.addHandler(file_handler)
-    app.logger.setLevel(getattr(logging, settings.log_level))
-    
-    app.logger.info(f"{settings.app_name} iniciado")
-    app.logger.info(f"DB URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
-
-
 def create_app() -> Flask:
     """
     Application factory.
@@ -117,8 +89,16 @@ def create_app() -> Flask:
         init_engine_and_session()
         db.create_all()
 
-    # Setup logging
-    setup_logging(app)
+    # Setup logging with the new centralized system
+    setup_flask_logging(app)
+    
+    # Log application startup
+    try:
+        app.logger.info(f"{settings.app_name} Flask app initialized - PID: {os.getpid()}")
+        app.logger.info(f"DB URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
+    except Exception as e:
+        import sys
+        print(f"Warning: Could not write Flask startup log: {e}", file=sys.stderr)
 
     # ==================== ROUTES ==================== #
 
@@ -434,6 +414,12 @@ def create_app() -> Flask:
 
     # ==================== DASH DASHBOARD ==================== #
     
+    # Redirección para mantener compatibilidad con URLs directas
+    @app.route('/viento-gases')
+    def redirect_viento_gases():
+        """Redirige /viento-gases a /dash/viento-gases"""
+        return redirect('/dash/viento-gases')
+    
     dash_app = Dash(
         __name__,
         server=app,
@@ -441,9 +427,44 @@ def create_app() -> Flask:
         title="Calidad del Aire – Sensores Bajo Costo",
         suppress_callback_exceptions=True,
         assets_folder=os.path.join(os.path.dirname(__file__), "dashboard", "assets"),
+        use_pages=False,  # Usaremos navegación manual
     )
-    dash_app.layout = build_layout(app)
+    
+    # Importar layouts y callbacks
+    from src.dashboard.layout import build_layout
+    from src.dashboard.layout_wind_gases import build_wind_gases_layout
+    from src.dashboard.callbacks import register_callbacks
+    from src.dashboard.callbacks_wind_gases import register_wind_gases_callbacks
+    from src.dashboard.callbacks_navigation import register_navigation_callbacks
+    from dash import dcc, html
+    from dash.dependencies import Input, Output
+    
+    # Layout principal con navegación
+    dash_app.layout = html.Div([
+        dcc.Location(id='url', refresh=False),
+        html.Div(id='page-content')
+    ])
+    
+    # Callback para navegación entre páginas
+    @dash_app.callback(
+        Output('page-content', 'children'),
+        Input('url', 'pathname')
+    )
+    def display_page(pathname):
+        # Dash usa rutas relativas dentro de su url_base_pathname
+        # Por ejemplo: /dash/ + viento-gases = /dash/viento-gases en navegador
+        # pero pathname en el callback es solo '/viento-gases'
+        if pathname and 'viento-gases' in pathname:
+            return build_wind_gases_layout(app)
+        else:  # Default: /dash/ o /dash o /
+            return build_layout(app)
+    
+    # Registrar callbacks de todos los módulos
     register_callbacks(dash_app, app)
+    register_wind_gases_callbacks(dash_app)
+    from src.dashboard.callbacks_wind_gases import register_reset_callback
+    register_reset_callback(dash_app)
+    register_navigation_callbacks(dash_app)
 
     return app
 

@@ -8,8 +8,9 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from src.core.models import Measurement, SensorChannel, row_from_payload
+from src.utils.logging_config import get_app_logger
 
-logger = logging.getLogger(__name__)
+logger = get_app_logger()
 
 
 class PayloadProcessor:

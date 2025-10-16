@@ -41,11 +41,21 @@ class Measurement(db.Model):
         nullable=False
     )
 
-    # Measurements
+    # Measurements - Particulate Matter
     pm25: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pm10: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    # Measurements - Environmental
     temp: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     rh: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    # Measurements - Gases
+    no2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Nitrogen Dioxide
+    co2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Carbon Dioxide
+    
+    # Measurements - Wind
+    vel_viento: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Wind speed
+    dir_viento: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Wind direction (degrees)
 
     # Timestamps in Bogota timezone
     fecha: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -88,6 +98,10 @@ class Measurement(db.Model):
             "pm10": self.pm10,
             "temp": self.temp,
             "rh": self.rh,
+            "no2": self.no2,
+            "co2": self.co2,
+            "vel_viento": self.vel_viento,
+            "dir_viento": self.dir_viento,
             "fecha": self.fecha.isoformat() if self.fecha else None,
             "hora": self.hora.isoformat() if self.hora else None,
             "fechah_local": self.fechah_local.isoformat() if self.fechah_local else None,
@@ -192,7 +206,7 @@ def row_from_payload(
     """
     device_id = payload.get("DeviceId") or device_id_fallback or "UNKNOWN"
 
-    # Raw variables
+    # Raw variables - Environmental
     fecha = payload.get("Fecha")
     hora = payload.get("Hora")
     fechah = payload.get("FechaH")
@@ -200,6 +214,16 @@ def row_from_payload(
     w = payload.get("W")
     temp = payload.get("temp")
     rh = payload.get("hr")
+    
+    # Raw variables - Gases
+    # Buscar campos específicos de gases (NO2 y CO2)
+    # NOTA: n0310Um1/Um2 son contadores de partículas 0.3-1.0µm, NO son gases
+    no2 = payload.get("no2") or payload.get("NO2") or payload.get("no2_ppb")
+    co2 = payload.get("co2") or payload.get("CO2") or payload.get("co2_ppm")
+    
+    # Raw variables - Wind
+    vel = payload.get("vel") or payload.get("vel_ms")  # Wind speed
+    dir_wind = payload.get("dir")  # Wind direction
 
     dt_local = to_bogota_dt(fecha, hora, fechah)
 
@@ -224,5 +248,9 @@ def row_from_payload(
         "w": _as_float(w),
         "temp": _as_float(temp),
         "rh": _as_float(rh),
+        "no2": _as_float(no2),
+        "co2": _as_float(co2),
+        "vel_viento": _as_float(vel),
+        "dir_viento": _as_float(dir_wind),
         "raw_json": json.dumps(payload, ensure_ascii=False),
     }

@@ -7,7 +7,9 @@ import logging
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
+from src.utils.logging_config import get_app_logger
+
+logger = get_app_logger()
 
 
 class HealthMonitor:

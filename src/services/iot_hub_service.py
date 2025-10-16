@@ -16,8 +16,9 @@ from src.iot.processor import PayloadProcessor
 from src.iot.monitoring import HealthMonitor
 from src.services.measurement_service import MeasurementService
 from src.utils.constants import BOGOTA
+from src.utils.logging_config import get_app_logger
 
-logger = logging.getLogger(__name__)
+logger = get_app_logger()
 
 
 class IoTHubService:

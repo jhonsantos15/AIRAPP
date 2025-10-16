@@ -1,4 +1,8 @@
-from datetime import datetime, timedelta, date
+"""
+Layout para dashboard de Viento y Gases (NO2, CO2).
+Incluye rosa de vientos y series temporales.
+"""
+from datetime import datetime, timedelta
 from dash import html, dcc
 from sqlalchemy import func
 from src.utils.labels import label_for
@@ -9,13 +13,8 @@ from src.dashboard.navigation import create_navigation_sidebar, create_breadcrum
 
 
 def get_available_date_range():
-    """
-    Obtiene el rango de fechas disponibles en la base de datos.
-    Retorna (min_date, max_date) como objetos date de Python.
-    Si no hay datos, retorna fechas por defecto.
-    """
+    """Obtiene el rango de fechas disponibles en la BD."""
     try:
-        # Consultar fecha mínima y máxima con datos
         result = db.session.query(
             func.min(Measurement.fecha).label('min_date'),
             func.max(Measurement.fecha).label('max_date')
@@ -26,19 +25,14 @@ def get_available_date_range():
     except Exception as e:
         print(f"Error obteniendo rango de fechas: {e}")
     
-    # Fallback: retornar rango por defecto (últimos 30 días)
     today = datetime.now(BOGOTA).date()
     return today - timedelta(days=30), today
 
 
-def build_layout(app):
+def build_wind_gases_layout(app):
     """
-    Construye el layout del dashboard.
-    SIEMPRE muestra todos los equipos S1-S6, incluso si no tienen datos actualmente
-    (pueden estar en mantenimiento o pendientes de instalación).
+    Construye el layout del dashboard de Viento y Gases.
     """
-    # IDs de TODOS los equipos configurados (S1 a S6)
-    # No filtramos por disponibilidad de datos - mostramos todos los equipos del sistema
     devices = [f"S{i}_PMTHVD" for i in range(1, 7)]
     
     today_dt = datetime.now(BOGOTA)
@@ -46,19 +40,14 @@ def build_layout(app):
     # Cambiar a 24 horas por defecto (1 día completo)
     start_default = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Obtener rango de fechas disponibles en la BD
     with app.app_context():
         min_date_available, max_date_available = get_available_date_range()
     
-    # Convertir a strings para el DatePickerRange
     min_date_str = min_date_available.strftime("%Y-%m-%d")
     max_date_str = max_date_available.strftime("%Y-%m-%d")
     
-    # Asegurar que start_default esté dentro del rango disponible
     if start_default < min_date_str:
         start_default = min_date_str
-    
-    # Asegurar que today esté dentro del rango disponible
     if today > max_date_str:
         today = max_date_str
 
@@ -66,15 +55,15 @@ def build_layout(app):
         className="page",
         children=[
             # ---------- NAVEGACIÓN LATERAL ----------
-            create_navigation_sidebar(current_page="principal"),
+            create_navigation_sidebar(current_page="viento-gases"),
             
             # ---------- BREADCRUMBS ----------
             create_breadcrumbs([
                 ("🏠 Inicio", "/dash/"),
-                "Material Particulado"
+                "Viento y Gases"
             ]),
             
-            # ---------- TOPBAR ----------
+            # ---------- TOPBAR (IDÉNTICO EN AMBOS DASHBOARDS) ----------
             html.Header(
                 className="topbar",
                 children=[
@@ -91,7 +80,7 @@ def build_layout(app):
                     html.Div(
                         className="status",
                         children=[
-                            html.Div(id="txt-last-update", className="last-update"),
+                            html.Div(id="txt-last-update-wind", className="last-update"),
                             html.Small(
                                 "Datos indicativos, Sistema de Vigilancia Calidad de Aire Sensores Bajo Costo",
                                 className="disclaimer",
@@ -101,7 +90,7 @@ def build_layout(app):
                 ],
             ),
 
-            # ---------- CONTROLES OPTIMIZADOS ----------
+            # ---------- CONTROLES (IDÉNTICO EN AMBOS DASHBOARDS) ----------
             html.Section(
                 className="controls",
                 children=[
@@ -111,7 +100,7 @@ def build_layout(app):
                         children=[
                             html.Label("📍 EQUIPOS A MONITOREAR", className="filter-label-inline"),
                             dcc.Dropdown(
-                                id="ddl-devices",
+                                id="ddl-devices-wind",
                                 options=[{"label": label_for(d), "value": d} for d in devices],
                                 value=devices,
                                 multi=True,
@@ -122,53 +111,37 @@ def build_layout(app):
                         ],
                     ),
                     
-                    # FILA 2: Todos los filtros en una sola fila horizontal
+                    # FILA 2: Filtros unificados (sin sensores - no aplica para viento y gases)
                     html.Div(
                         className="filters-unified-row",
                         children=[
-                            # Sensores
+                            # Variables (NO2, CO2, Velocidad)
                             html.Div(
                                 className="filter-inline",
                                 children=[
-                                    html.Label("🔌 SENSORES", className="filter-label-small"),
+                                    html.Label("📊 VARIABLES", className="filter-label-small"),
                                     dcc.Checklist(
-                                        id="rdo-channel",
+                                        id="chk-variables-wind",
                                         options=[
-                                            {"label": " Sensor 1", "value": "Um1"},
-                                            {"label": " Sensor 2", "value": "Um2"},
+                                            {"label": " NO2", "value": "no2"},
+                                            {"label": " CO2", "value": "co2"},
+                                            {"label": " Velocidad Viento", "value": "vel_viento"},
                                         ],
-                                        value=["Um1", "Um2"],
+                                        value=["no2", "co2", "vel_viento"],
                                         inline=True,
                                         className="checkbox-modern",
                                         labelStyle={"display": "inline-flex", "alignItems": "center"},
                                     ),
                                 ],
                             ),
-                            # Material Particulado
-                            html.Div(
-                                className="filter-inline",
-                                children=[
-                                    html.Label("💨 MATERIAL PARTICULADO", className="filter-label-small"),
-                                    dcc.Checklist(
-                                        id="rdo-pm",
-                                        options=[
-                                            {"label": " PM2.5", "value": "pm25"},
-                                            {"label": " PM10", "value": "pm10"},
-                                        ],
-                                        value=["pm25", "pm10"],
-                                        inline=True,
-                                        className="checkbox-modern",
-                                        labelStyle={"display": "inline-flex", "alignItems": "center"},
-                                    ),
-                                ],
-                            ),
+                            
                             # Período de Análisis
                             html.Div(
                                 className="filter-inline",
                                 children=[
                                     html.Label("📅 PERIODO DE ANÁLISIS", className="filter-label-small"),
                                     dcc.DatePickerRange(
-                                        id="dp-range",
+                                        id="date-picker-wind",
                                         start_date=start_default,
                                         end_date=today,
                                         min_date_allowed=min_date_str,
@@ -180,41 +153,42 @@ def build_layout(app):
                                         start_date_placeholder_text="Inicio",
                                         end_date_placeholder_text="Fin",
                                         clearable=False,
+                                        first_day_of_week=1,
                                     ),
                                 ],
                             ),
+                            
                             # Botones de acción (sin label, solo botones en línea)
                             html.Div(
                                 className="action-buttons-inline",
                                 children=[
                                     html.Button(
                                         [html.Span("🔄", className="btn-emoji"), " Actualizar"], 
-                                        id="btn-refresh", 
+                                        id="btn-refresh-wind", 
                                         n_clicks=0, 
                                         className="btn-action btn-refresh",
                                         title="Actualizar datos ahora"
                                     ),
                                     html.Button(
                                         [html.Span("✓", className="btn-emoji"), " Aplicar Filtros"], 
-                                        id="btn-apply", 
+                                        id="btn-apply-wind", 
                                         n_clicks=0, 
                                         className="btn-action btn-apply"
                                     ),
                                     html.Button(
                                         [html.Span("↺", className="btn-emoji"), " Restablecer"], 
-                                        id="btn-clear", 
+                                        id="btn-reset-wind", 
                                         n_clicks=0, 
-                                        className="btn-action btn-clear"
+                                        className="btn-action btn-reset"
                                     ),
                                 ],
                             ),
                         ],
                     ),
                     
-                    # Separador visual
+                    # FILA 3: Descargar Reportes Excel
                     html.Hr(className="divider"),
                     
-                    # ---------- SECCIÓN DE REPORTES EXCEL ----------
                     html.Div(
                         className="reports-section",
                         children=[
@@ -259,46 +233,102 @@ def build_layout(app):
                 ],
             ),
 
-            # ---------- REJILLA DE GRÁFICOS ----------
+            # ---------- SECCIÓN DE GRÁFICOS ----------
             html.Section(
-                className="charts-grid",
+                className="content",
                 children=[
+                    # Primera Fila: Rosa de Vientos + Velocidad del Viento
                     html.Div(
-                        className="plot-card col-span-12",
-                        children=dcc.Loading(
-                            type="dot", color="#11B6C7",
-                            children=dcc.Graph(
-                                id="graph-pm",
-                                style={"height": "var(--h-pm)"},
-                                config={"displayModeBar": False, "responsive": True},
+                        className="graphs-row-compact",
+                        children=[
+                            html.Div(
+                                className="plot-card",
+                                children=[
+                                    html.H3("🌹 Rosa de Vientos", className="card-title"),
+                                    dcc.Loading(
+                                        id="loading-windrose",
+                                        type="circle",
+                                        children=dcc.Graph(
+                                            id="graph-windrose",
+                                            config={"displayModeBar": True, "displaylogo": False},
+                                            className="graph-compact",
+                                        ),
+                                    ),
+                                ],
                             ),
-                        ),
+                            html.Div(
+                                className="plot-card",
+                                children=[
+                                    html.H3("💨 Velocidad del Viento", className="card-title"),
+                                    dcc.Loading(
+                                        id="loading-wind-speed",
+                                        type="circle",
+                                        children=dcc.Graph(
+                                            id="graph-wind-speed",
+                                            config={"displayModeBar": True, "displaylogo": False},
+                                            className="graph-compact",
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ],
                     ),
+                    
+                    # Segunda Fila: NO2 + CO2
                     html.Div(
-                        className="plot-card col-span-6",
-                        children=dcc.Loading(
-                            type="dot", color="#11B6C7",
-                            children=dcc.Graph(
-                                id="graph-rh",
-                                style={"height": "var(--h-small)"},
-                                config={"displayModeBar": False, "responsive": True},
+                        className="graphs-row-compact",
+                        children=[
+                            html.Div(
+                                className="plot-card",
+                                children=[
+                                    html.H3("🏭 Dióxido de Nitrógeno (NO2)", className="card-title"),
+                                    dcc.Loading(
+                                        id="loading-no2",
+                                        type="circle",
+                                        children=dcc.Graph(
+                                            id="graph-no2",
+                                            config={"displayModeBar": True, "displaylogo": False},
+                                            className="graph-compact",
+                                        ),
+                                    ),
+                                ],
                             ),
-                        ),
-                    ),
-                    html.Div(
-                        className="plot-card col-span-6",
-                        children=dcc.Loading(
-                            type="dot", color="#11B6C7",
-                            children=dcc.Graph(
-                                id="graph-temp",
-                                style={"height": "var(--h-small)"},
-                                config={"displayModeBar": False, "responsive": True},
+                            html.Div(
+                                className="plot-card",
+                                children=[
+                                    html.H3("🌫️ Dióxido de Carbono (CO2)", className="card-title"),
+                                    dcc.Loading(
+                                        id="loading-co2",
+                                        type="circle",
+                                        children=dcc.Graph(
+                                            id="graph-co2",
+                                            config={"displayModeBar": True, "displaylogo": False},
+                                            className="graph-compact",
+                                        ),
+                                    ),
+                                ],
                             ),
-                        ),
+                        ],
                     ),
                 ],
             ),
 
-            dcc.Interval(id="intv", interval=60_000, n_intervals=0),
+            # ---------- FOOTER ----------
+            html.Footer(
+                className="footer",
+                children=[
+                    html.P(
+                        "© 2025 Sistema de Monitoreo de Calidad del Aire | Desarrollado con Dash & Plotly",
+                        className="footer-text",
+                    ),
+                ],
+            ),
+
+            # Interval para actualización automática (cada 5 minutos)
+            dcc.Interval(
+                id="interval-auto-refresh-wind",
+                interval=5*60*1000,  # 5 minutos
+                n_intervals=0,
+            ),
         ],
     )
